@@ -28,6 +28,14 @@ game = {
     "votes": {}
 }
 
+MIN_PLAYERS = 3       # Минимальное число игроков для старта (можешь изменить под себя)
+LOBBY_TIMEOUT = 120   # Время автоматического ожидания в секундах (2 минуты)
+
+def get_join_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎮 Войти в игру", callback_data="join")]
+    ])
+
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer("👋 Мафия-бот готов к работе! Для создания игры используй /create_game")
@@ -35,7 +43,7 @@ async def cmd_start(message: Message):
 @router.message(Command("create_game"))
 async def cmd_create_game(message: Message, state: FSMContext):
     if game["active"]:
-        await message.answer("⚠️ Игра уже идет!")
+        await message.answer("⚠️ Игра уже идет или лобби уже открыто!")
         return
     
     game["active"] = True
@@ -43,44 +51,43 @@ async def cmd_create_game(message: Message, state: FSMContext):
     game["night_actions"] = {}
     await state.set_state(GameState.lobby)
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎮 Войти в игру", callback_data="join")]
-    ])
-    await message.answer("🎲 **Лобби Мафии открыто!** Жмите кнопку для входа.", reply_markup=kb, parse_mode="Markdown")
+    await message.answer(
+        f"🎲 **Лобби Мафии открыто!**\n"
+        f"⏱ У вас есть {LOBBY_TIMEOUT // 60} минуты, чтобы собраться.\n"
+        f"👥 Минимум игроков: {MIN_PLAYERS}.\n"
+        f"Жмите кнопку ниже для входа!",
+        reply_markup=get_join_keyboard(),
+        parse_mode="Markdown"
+    )
 
-@router.callback_query(F.data == "join")
-async def cb_join(callback: CallbackQuery):
-    uid = callback.from_user.id
-    if uid in game["players"]:
-        await callback.answer("Ты уже зарегистрирован!", show_alert=True)
-        return
-    
-    game["players"][uid] = {
-        "name": callback.from_user.full_name,
-        "role": None,
-        "alive": True,
-        "duo_id": None
-    }
-    await callback.answer("Успешный вход!")
-    
-    count = len(game["players"])
-    try:
-        await callback.message.edit_text(
-            f"🎲 **Лобби Мафии открыто!**\nЗарегистрировано игроков: {count}\n"
-            "Запустите игру командой /start_mafia когда наберется состав.",
-            reply_markup=callback.message.reply_markup,
-            parse_mode="Markdown"
-        )
-    except Exception:
-        pass
+    # Запускаем фоновый таймер на автоматический старт через LOBBY_TIMEOUT секунд
+    asyncio.create_task(lobby_timer(message.bot, message.chat.id, state))
 
-@router.message(Command("start_mafia"))
-async def cmd_start_mafia(message: Message, state: FSMContext):
+async def lobby_timer(bot: Bot, chat_id: int, state: FSMContext):
+    # Ждем нужное время
+    await asyncio.sleep(LOBBY_TIMEOUT)
+    
+    # Проверяем, всё еще ли мы в лобби и игра не началась вручную
+    current_state = await state.get_state()
+    if game["active"] and current_state == GameState.lobby.state:
+        if len(game["players"]) < MIN_PLAYERS:
+            await bot.send_message(
+                chat_id,
+                f"⌛ Время ожидания вышло! Набралось всего {len(game['players'])} из {MIN_PLAYERS} игроков. "
+                f"Игра отменена."
+            )
+            game["active"] = False
+            game["players"].clear()
+            await state.clear()
+        else:
+            await bot.send_message(
+                chat_id,
+                f"🚀 Время вышло! Собралось игроков: {len(game['players'])}. Запускаем игру автоматически!"
+            )
+            await run_game_start(chat_id, state)
+
+async def run_game_start(chat_id: int, state: FSMContext):
     p_ids = list(game["players"].keys())
-    if len(p_ids) < 3:  # Для полноценного теста минимум 3, для вашей компании 15+
-        await message.answer("⚠️ Слишком мало игроков для старта!")
-        return
-
     random.shuffle(p_ids)
     
     # Алгоритм распределения спец-ролей и пар
@@ -112,7 +119,7 @@ async def cmd_start_mafia(message: Message, state: FSMContext):
         game["players"][doctors[1]]["duo_id"] = doctors[0]
 
     await state.set_state(GameState.night)
-    await message.answer("🌙 **Город засыпает. Наступает ночь.** Все действия происходят в ЛС у бота!", parse_mode="Markdown")
+    await bot_instance.send_message(chat_id, "🌙 **Город засыпает. Наступает ночь.** Все действия происходят в ЛС у бота!", parse_mode="Markdown")
 
     # Ночная рассылка кнопок и ролей
     for uid, pdata in game["players"].items():
@@ -123,7 +130,10 @@ async def cmd_start_mafia(message: Message, state: FSMContext):
             duo_name = game["players"][pdata["duo_id"]]["name"]
             text += f"🤝 Твой напарник: **{duo_name}**\n"
             
-        await bot_instance.send_message(uid, text, parse_mode="Markdown")
+        try:
+            await bot_instance.send_message(uid, text, parse_mode="Markdown")
+        except Exception:
+            pass
         
         # Генерация ночного меню действий
         if role in ["Дон Мафии", "Мафия", "Маньяк", "Доктор №1", "Доктор №2", "Шериф №1", "Шериф №2"]:
@@ -134,8 +144,62 @@ async def cmd_start_mafia(message: Message, state: FSMContext):
                         text=target_data["name"], 
                         callback_data=f"night_act:{uid}:{target_id}"
                     )])
-            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-            await bot_instance.send_message(uid, "🎯 Выбери цель для ночного действия:", reply_markup=kb)
+            if buttons:
+                kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+                try:
+                    await bot_instance.send_message(uid, "🎯 Выбери цель для ночного действия:", reply_markup=kb)
+                except Exception:
+                    pass
+
+@router.callback_query(F.data == "join")
+async def cb_join(callback: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state != GameState.lobby.state:
+        await callback.answer("❌ Лобби сейчас закрыто!", show_alert=True)
+        return
+
+    uid = callback.from_user.id
+    if uid in game["players"]:
+        await callback.answer("Ты уже зарегистрирован!", show_alert=True)
+        return
+    
+    game["players"][uid] = {
+        "name": callback.from_user.full_name,
+        "role": None,
+        "alive": True,
+        "duo_id": None
+    }
+    await callback.answer("Успешный вход!")
+    
+    count = len(game["players"])
+    try:
+        await callback.message.edit_text(
+            f"🎲 **Лобби Мафии открыто!**\n"
+            f"👥 Зарегистрировано игроков: **{count}** (нужно мин. {MIN_PLAYERS}).\n"
+            "Ждите таймера или запустите игру досрочно командой /start_mafia.",
+            reply_markup=callback.message.reply_markup,
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+@router.message(Command("start_mafia"))
+async def cmd_start_mafia(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state != GameState.lobby.state:
+        await message.answer("❌ Лобби еще не создано! Напишите /create_game")
+        return
+
+    p_ids = list(game["players"].keys())
+    if len(p_ids) < MIN_PLAYERS:
+        await message.answer(
+            f"⚠️ Недостаточно игроков для досрочного старта! "
+            f"Сейчас зарегистрировано: {len(p_ids)} из {MIN_PLAYERS} необходимых."
+        )
+        return
+
+    await message.answer("🎭 Все в сборе! Досрочно начинаем игру...")
+    await run_game_start(message.chat.id, state)
 
 @router.callback_query(F.data.startswith("night_act:"))
 async def cb_night_action(callback: CallbackQuery):
@@ -162,7 +226,6 @@ async def handle_last_words(message: Message, state: FSMContext):
     if message.from_user.id != game["current_speaker"]:
         return
     
-    # Строгое ограничение размера последнего слова
     text = message.text
     if len(text) > 100:
         await message.reply(f"⚠️ Слишком длинно! Твоё сообщение урезано до 100 символов.\n\nИтог: {text[:100]}")
