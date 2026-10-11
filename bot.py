@@ -38,6 +38,21 @@ NIGHT_TIMEOUT = 45     # Время на ночные ходы
 DISCUSSION_TIMEOUT = 45 # Время на дневное обсуждение
 VOTING_TIMEOUT = 30    # Время на дневное голосование
 
+async def night_timer(bot, chat_id, night_id):
+    """Автоматический таймер: принудительно завершает ночь, если кто-то проспал"""
+    await asyncio.sleep(NIGHT_TIMEOUT)
+    
+    # Проверяем, активна ли игра, идет ли ночь и совпадает ли id раунда
+    if game.get("active") and game.get("phase") == "night" and game.get("night_id") == night_id:
+        await bot.send_message(
+            chat_id,
+            "⏰ **Время ночного выбора истекло!**\n"
+            "Кто-то из ночных жителей проспал свой ход... Подводим итоги ночи.",
+            parse_mode="Markdown"
+        )
+        # Переходим к подведению итогов ночи
+        await resolve_night(bot, chat_id)
+
 def get_join_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 1. Написать боту в ЛС (активация)", url="https://t.me/MyServerMalfaBot?start=join")],
@@ -217,33 +232,6 @@ async def run_game_start(chat_id: int, state: FSMContext, bot: Bot):
             game["intern_id"] = uid
         elif assigned_role in ["Дон Мафии", "Мафия"]:
             game["mafia_ids"].append(uid)
-
-# Константа таймаута ночи (45 секунд)
-NIGHT_TIMEOUT = 45
-
-async def night_timer(bot, chat_id, night_id):
-    """Автоматический таймер: принудительно завершает ночь, если кто-то уснул в ЛС"""
-    await asyncio.sleep(NIGHT_TIMEOUT)
-    
-    # Проверяем, идет ли все еще игра, фаза "night" и та ли это самая ночь
-    if game.get("active") and game.get("phase") == "night" and game.get("night_id") == night_id:
-        await bot.send_message(
-            chat_id,
-            "⏰ Время ночного выбора истекло!\n"
-            "Кто-то из ночных жителей проспал свой ход... Город просыпается!",
-            parse_mode="Markdown"
-        )
-        # Принудительно подводим итоги ночи
-        await resolve_night(bot, chat_id)
-
-    await state.set_state(GameState.night)
-    await bot.send_message(
-        chat_id,
-        f"🌙 **Город засыпает. Наступает ночь.**\n"
-        f"🤫 Общий чат заблокирован! Сообщения разрешены **только ночью** внутри командных чатов в ЛС у бота.\n"
-        f"👥 Инструкции и ночные меню отправлены в ЛС!",
-        parse_mode="Markdown"
-    )
 
 async def start_night(bot, chat_id):
     # 1. Меняем фазу и увеличиваем счетчик ночи
