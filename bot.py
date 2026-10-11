@@ -53,7 +53,7 @@ async def cmd_create_game(message: Message, state: FSMContext):
     if message.chat.type in ["group", "supergroup"]:
         member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
         if member.status not in ["administrator", "creator"]:
-            await message.reply("⛔ **Доступ запрещен!**\nСоздавать лобби могут только администраторы чата.")
+            await message.reply("⛔ Доступ запрещен!\nСоздавать лобби могут только администраторы чата.")
             return
 
     if game["active"]:
@@ -89,7 +89,7 @@ async def cmd_stop_game(message: Message, state: FSMContext):
     if message.chat.type in ["group", "supergroup"]:
         member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
         if member.status not in ["administrator", "creator"]:
-            await message.reply("⛔ **Доступ запрещен!**\nОстановить набор могут только администраторы чата.")
+            await message.reply("⛔ Доступ запрещен!\nОстановить набор могут только администраторы чата.")
             return
 
     # 2. Проверяем, идет ли вообще игра или открыто ли лобби
