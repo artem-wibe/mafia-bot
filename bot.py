@@ -111,6 +111,41 @@ async def cmd_stop_game(message: Message, state: FSMContext):
         parse_mode="Markdown"
     )
 
+@router.callback_query(F.data == "join")
+async def cb_join_game(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    user_name = callback.from_user.first_name
+
+    if not game["active"]:
+        await callback.answer("⚠️ Сейчас нет активной игры или лобби закрыто!", show_alert=True)
+        return
+
+    if user_id in game["players"]:
+        await callback.answer("Вы уже в игре!", show_alert=True)
+        return
+
+    game["players"][user_id] = {
+        "name": user_name,
+        "role": None,
+        "alive": True,
+        "silenced": False
+    }
+    
+    await callback.answer(f"Вы успешно вошли в игру! Участников: {len(game['players'])}")
+    
+    try:
+        await callback.message.edit_text(
+            f"🎲 Лобби Мафии открыто!\n"
+            f"⏰ Время сбора: 2 мин.\n"
+            f"👥 Минимум участников: 3.\n"
+            f"✅ Вошло игроков: **{len(game['players'])}**\n\n"
+            f"📌 Правило: Если играете впервые, нажмите кнопку 1 для перехода в ЛС, а затем нажмите 'Войти в игру'!",
+            reply_markup=callback.message.reply_markup,
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
 async def lobby_timer(bot: Bot, chat_id: int, state: FSMContext):
     await asyncio.sleep(LOBBY_TIMEOUT)
     current_state = await state.get_state()
