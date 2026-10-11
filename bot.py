@@ -47,7 +47,6 @@ def get_join_keyboard():
 async def cmd_start(message: Message):
     await message.answer("👋 Мафия-бот готов к работе! Наберите /create_game для запуска лобби.")
 
-
     @router.message(Command("create_game"))
 async def cmd_create_game(message: Message, state: FSMContext):
     if message.chat.type in ["group", "supergroup"]:
