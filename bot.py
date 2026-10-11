@@ -47,12 +47,19 @@ def get_join_keyboard():
 async def cmd_start(message: Message):
     await message.answer("👋 Мафия-бот готов к работе! Наберите /create_game для запуска лобби.")
 
-@router.message(Command("create_game"))
+
+    @router.message(Command("create_game"))
 async def cmd_create_game(message: Message, state: FSMContext):
+    if message.chat.type in ["group", "supergroup"]:
+        member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status not in ["administrator", "creator"]:
+            await message.reply("⛔ **Доступ запрещен!**\nСоздавать лобби могут только администраторы чата.")
+            return
+
     if game["active"]:
         await message.answer("⚠️ Игра уже запущена или лобби открыто!")
         return
-    
+
     game["active"] = True
     game["players"] = {}
     game["night_actions"] = {}
@@ -62,12 +69,12 @@ async def cmd_create_game(message: Message, state: FSMContext):
     game["doctor_id"] = None
     game["intern_id"] = None
     game["mafia_ids"] = []
-    
+
     await state.set_state(GameState.lobby)
-    
+
     await message.answer(
         f"🎲 **Лобби Мафии открыто!**\n"
-        f"⏱ Время сбора: {LOBBY_TIMEOUT // 60} мин.\n"
+        f"⏰ Время сбора: {LOBBY_TIMEOUT // 60} мин.\n"
         f"👥 Минимум участников: {MIN_PLAYERS}.\n"
         f"Нажмите кнопку ниже, чтобы войти в игру!",
         reply_markup=get_join_keyboard(),
