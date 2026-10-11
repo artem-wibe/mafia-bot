@@ -28,7 +28,7 @@ game = {
     "votes": {}
 }
 
-MIN_PLAYERS = 3       # Минимальное число игроков для старта (можешь изменить под себя)
+MIN_PLAYERS = 3       # Минимальное число игроков для старта
 LOBBY_TIMEOUT = 120   # Время автоматического ожидания в секундах (2 минуты)
 
 def get_join_keyboard():
@@ -64,10 +64,8 @@ async def cmd_create_game(message: Message, state: FSMContext):
     asyncio.create_task(lobby_timer(message.bot, message.chat.id, state))
 
 async def lobby_timer(bot: Bot, chat_id: int, state: FSMContext):
-    # Ждем нужное время
     await asyncio.sleep(LOBBY_TIMEOUT)
     
-    # Проверяем, всё еще ли мы в лобби и игра не началась вручную
     current_state = await state.get_state()
     if game["active"] and current_state == GameState.lobby.state:
         if len(game["players"]) < MIN_PLAYERS:
@@ -88,11 +86,48 @@ async def lobby_timer(bot: Bot, chat_id: int, state: FSMContext):
 
 async def run_game_start(chat_id: int, state: FSMContext):
     p_ids = list(game["players"].keys())
+    total_players = len(p_ids)
     random.shuffle(p_ids)
     
-    # Алгоритм распределения спец-ролей и пар
-    roles_pool = ["Дон Мафии", "Мафия", "Шериф №1", "Шериф №2", "Доктор №1", "Доктор №2", "Судья", "Маньяк"]
-    while len(roles_pool) < len(p_ids):
+    # 1. Формула баланса: 3 мирных - 1 Мафия (1 мафия на каждые 4 человека в сумме)
+    mafia_count = total_players // 4
+    if mafia_count < 1:
+        mafia_count = 1  
+        
+    don_count = 1 if mafia_count >= 2 else 0 
+    simple_mafia_count = mafia_count - don_count
+    
+    # 2. Нейтральная роль (Маньяк): появляется на 11-м игроке, далее каждые 5 человек (11, 16, 21...)
+    maniac_count = 0
+    if total_players >= 11:
+        maniac_count = 1 + (total_players - 11) // 5
+
+    # Спец-роли
+    sheriff_count = 2 if total_players >= 10 else 1
+    doctor_count = 2 if total_players >= 10 else 1
+    judge_count = 1 if total_players >= 7 else 0
+
+    # Собираем пул ролей
+    roles_pool = []
+    
+    if don_count > 0:
+        roles_pool.append("Дон Мафии")
+    for _ in range(simple_mafia_count):
+        roles_pool.append("Мафия")
+        
+    for i in range(1, sheriff_count + 1):
+        roles_pool.append(f"Шериф №{i}")
+    for i in range(1, doctor_count + 1):
+        roles_pool.append(f"Доктор №{i}")
+        
+    if judge_count > 0:
+        roles_pool.append("Судья")
+        
+    for i in range(1, maniac_count + 1):
+        roles_pool.append(f"Маньяк №{i}" if maniac_count > 1 else "Маньяк")
+        
+    # Заполняем оставшиеся места мирными жителями
+    while len(roles_pool) < total_players:
         roles_pool.append("Мирный житель")
     
     random.shuffle(roles_pool)
@@ -119,7 +154,12 @@ async def run_game_start(chat_id: int, state: FSMContext):
         game["players"][doctors[1]]["duo_id"] = doctors[0]
 
     await state.set_state(GameState.night)
-    await bot_instance.send_message(chat_id, "🌙 **Город засыпает. Наступает ночь.** Все действия происходят в ЛС у бота!", parse_mode="Markdown")
+    await bot_instance.send_message(
+        chat_id, 
+        f"🌙 **Город засыпает. Наступает ночь.**\n"
+        f"👥 Всего игроков: {total_players} | Мафий: {mafia_count} | Маньяков: {maniac_count}. Все действия в ЛС!", 
+        parse_mode="Markdown"
+    )
 
     # Ночная рассылка кнопок и ролей
     for uid, pdata in game["players"].items():
@@ -136,7 +176,7 @@ async def run_game_start(chat_id: int, state: FSMContext):
             pass
         
         # Генерация ночного меню действий
-        if role in ["Дон Мафии", "Мафия", "Маньяк", "Доктор №1", "Доктор №2", "Шериф №1", "Шериф №2"]:
+        if role in ["Дон Мафии", "Мафия"] or "Маньяк" in role or "Доктор" in role or "Шериф" in role:
             buttons = []
             for target_id, target_data in game["players"].items():
                 if target_data["alive"] and target_id != uid:
@@ -217,7 +257,7 @@ async def cb_night_action(callback: CallbackQuery):
         await callback.answer(f"Ты лечишь: {target_name}")
     elif "Шериф" in role:
         target_role = game["players"][target_id]["role"]
-        is_bad = "Мафия" in target_role or target_role == "Маньяк"
+        is_bad = "Мафия" in target_role or "Маньяк" in target_role
         res = "🔴 ОПАСЕН (Мафия/Маньяк)" if is_bad else "🟢 ЧИСТ (Мирный)"
         await callback.message.edit_text(f"Проверка игрока {target_name}: {res}")
 
