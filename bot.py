@@ -83,6 +83,34 @@ async def cmd_create_game(message: Message, state: FSMContext):
 
     asyncio.create_task(lobby_timer(message.bot, message.chat.id, state))
 
+@router.message(Command("stop_game"))
+async def cmd_stop_game(message: Message, state: FSMContext):
+    # 1. Проверяем, что команда вызвана в группе/супергруппе и пользователь — админ
+    if message.chat.type in ["group", "supergroup"]:
+        member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status not in ["administrator", "creator"]:
+            await message.reply("⛔ **Доступ запрещен!**\nОстановить набор могут только администраторы чата.")
+            return
+
+    # 2. Проверяем, идет ли вообще игра или открыто ли лобби
+    current_state = await state.get_state()
+    if not game["active"] or current_state != GameState.lobby.state:
+        await message.answer("⚠️ Сейчас нет активного лобби для остановки (игра либо не создана, либо уже вовсю идет).")
+        return
+
+    # 3. Останавливаем процесс и сбрасываем всё
+    game["active"] = False
+    game["players"].clear()
+    game["night_actions"].clear()
+    game["votes"].clear()
+    await state.clear()
+
+    await message.answer(
+        "🛑 **Регистрация на игру отменена администратором.**\n"
+        "Лобби закрыто, список участников очищен.",
+        parse_mode="Markdown"
+    )
+
 async def lobby_timer(bot: Bot, chat_id: int, state: FSMContext):
     await asyncio.sleep(LOBBY_TIMEOUT)
     current_state = await state.get_state()
