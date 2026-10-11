@@ -83,6 +83,44 @@ async def cmd_create_game(message: Message, state: FSMContext):
 
     asyncio.create_task(lobby_timer(message.bot, message.chat.id, state))
 
+@router.message(Command("stop_game"))
+async def cmd_stop_game(message: Message, state: FSMContext):
+    # 1. Проверяем, что команда вызвана в чате
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.answer("❌ Эта команда работает только в игровом чате!")
+        return
+
+    # 2. Проверяем права администратора чата
+    member = await message.bot.get_chat_member(chat_id=message.chat.id, user_id=message.from_user.id)
+    if member.status not in ["administrator", "creator"]:
+        await message.reply("⛔ **Доступ запрещен!** Снять игру с регистрации могут только администраторы чата.")
+        return
+
+    # 3. Проверяем, есть ли вообще активное лобби или игра
+    current_state = await state.get_state()
+    if not game["active"] and current_state is None:
+        await message.answer("⚠️ Сейчас нет активной игры или регистрации, которую можно было бы остановить.")
+        return
+
+    # 4. ПОЛНЫЙ СБРОС (Reset): очищаем глобальный словарь игры и сбрасываем FSM
+    game["active"] = False
+    game["players"].clear()
+    game["night_actions"].clear()
+    game["votes"].clear()
+    game["sheriff_id"] = None
+    game["deputy_id"] = None
+    game["doctor_id"] = None
+    game["intern_id"] = None
+    game["mafia_ids"].clear()
+
+    await state.clear()
+
+    # 5. Оповещаем чат
+    await message.answer(
+        f"🛑 **Регистрация / игра была принудительно остановлена и сброшена администратором {message.from_user.full_name}!**\n\n"
+        f"Чтобы начать заново, введите `/create_game`."
+    )
+
 async def lobby_timer(bot: Bot, chat_id: int, state: FSMContext):
     await asyncio.sleep(LOBBY_TIMEOUT)
     current_state = await state.get_state()
