@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 
-TOKEN = "8619385160:AAEZGY1h9uLmPlqqDvaowRVilUinUf5JDo4"
+TOKEN = "8619385160:AAEzy3mQfzrK0RnSDav8tpEs-q-Cj7qiDOY"
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
