@@ -191,11 +191,12 @@ async def run_game_start(chat_id: int, state: FSMContext, bot: Bot):
         roles_pool.append("Интерн")
 
     roles_pool.append("Эскортница")
-    roles_pool.append("Самоубийца")
     
     if total_players >= 11:
         roles_pool.append("Пеннивайз")
 
+    if total_players >= 9:
+        roles_pool.append("Самоубийца")
     while len(roles_pool) < total_players:
         roles_pool.append("Мирный житель")
 
