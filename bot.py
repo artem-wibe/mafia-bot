@@ -22,27 +22,28 @@ class GameState(StatesGroup):
 # Глобальное состояние игры
 game = {
     "active": False,
-    "phase": "lobby",    # Добавлено отслеживание фазы
-    "players": {},       # user_id: {"name": str, "role": str, "alive": bool, "silenced": bool}
-    "night_actions": {}, # действия за текущую ночь
-    "votes": {},         # голоса игроков днем: {voter_id: target_id}
+    "phase": "lobby",
+    "players": {},       # user_id: {"name": str, "role": str, "alive": bool, "silenced": bool, "has_acted": bool}
+    "night_actions": {}, 
+    "votes": {},         
     "sheriff_id": None,
     "deputy_id": None,
     "doctor_id": None,
     "intern_id": None,
     "mafia_ids": [],
+    "maniac_id": None,
     "night_id": 0
 }
 
-MIN_PLAYERS = 3
+MIN_PLAYERS = 4         # Поднят порог до 4 игроков
 LOBBY_TIMEOUT = 120
-NIGHT_TIMEOUT = 45      # Время на ночные ходы
-DISCUSSION_TIMEOUT = 45 # Время на дневное обсуждение
-VOTING_TIMEOUT = 30     # Время на дневное голосование
+NIGHT_TIMEOUT = 45      
+DISCUSSION_TIMEOUT = 45 
+VOTING_TIMEOUT = 30     
 
 def get_join_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 1. Написать боту в ЛС (активация)", url="https://t.me/MyServerMalfaBot?start=join")],
+        [InlineKeyboardButton(text="💬 1. Написать боту в ЛС (активация)", url="https://t.me/MyServerMafiaBot?start=join")],
         [InlineKeyboardButton(text="🎮 2. Войти в игру", callback_data="join")]
     ])
 
@@ -72,12 +73,13 @@ async def cmd_create_game(message: Message, state: FSMContext):
     game["doctor_id"] = None
     game["intern_id"] = None
     game["mafia_ids"] = []
+    game["maniac_id"] = None
     game["night_id"] = 0
 
     await state.set_state(GameState.lobby)
 
     await message.answer(
-        f"🎲 **Лобби Мафии открыто!**\n"
+        f"🎲 **Лобби Мафии открыто (v1.2)!**\n"
         f"⏰ Время сбора: {LOBBY_TIMEOUT // 60} мин.\n"
         f"👥 Минимум участников: {MIN_PLAYERS}.\n\n"
         f"📌 *Правило:* Если играете впервые, нажмите кнопку 1 для перехода в ЛС, а затем нажмите 'Войти в игру'!",
@@ -130,7 +132,8 @@ async def cb_join_game(callback: CallbackQuery):
         "name": user_name,
         "role": None,
         "alive": True,
-        "silenced": False
+        "silenced": False,
+        "has_acted": False
     }
     
     await callback.answer(f"Вы успешно вошли в игру! Участников: {len(game['players'])}")
@@ -139,7 +142,7 @@ async def cb_join_game(callback: CallbackQuery):
         await callback.message.edit_text(
             f"🎲 Лобби Мафии открыто!\n"
             f"⏰ Время сбора: 2 мин.\n"
-            f"👥 Минимум участников: 3.\n"
+            f"👥 Минимум участников: {MIN_PLAYERS}.\n"
             f"✅ Вошло игроков: **{len(game['players'])}**\n\n"
             f"📌 Правило: Если играете впервые, нажмите кнопку 1 для перехода в ЛС, а затем нажмите 'Войти в игру'!",
             reply_markup=callback.message.reply_markup,
@@ -153,12 +156,12 @@ async def lobby_timer(bot: Bot, chat_id: int, state: FSMContext):
     current_state = await state.get_state()
     if game["active"] and current_state == GameState.lobby.state:
         if len(game["players"]) < MIN_PLAYERS:
-            await bot.send_message(chat_id, f"⌛ Набралось всего {len(game['players'])} чел. Игра отменена.")
+            await bot.send_message(chat_id, f"⌛ Набралось всего {len(game['players'])} чел. Нужно минимум {MIN_PLAYERS}. Игра отменена.")
             game["active"] = False
             game["players"].clear()
             await state.clear()
         else:
-            await bot.send_message(chat_id, "🚀 Время вышло! Начинаем партию!")
+            await bot.send_message(chat_id, "🚀 Время вышло! Начинаем партию по законам военного времени!")
             await run_game_start(chat_id, state, bot)
 
 async def notify_team(bot: Bot, user_ids: list, message_text: str):
@@ -194,6 +197,10 @@ async def run_game_start(chat_id: int, state: FSMContext, bot: Bot):
 
     roles_pool.append("Эскортница")
     
+    # Добавляем Маньяка (нейтральная роль) при достаточном количестве игроков или в качестве фичи релиза
+    if total_players >= 5:
+        roles_pool.append("Маньяк")
+
     if total_players >= 11:
         roles_pool.append("Пеннивайз")
 
@@ -206,6 +213,7 @@ async def run_game_start(chat_id: int, state: FSMContext, bot: Bot):
         assigned_role = roles_pool[i]
         game["players"][uid]["role"] = assigned_role
         game["players"][uid]["silenced"] = False
+        game["players"][uid]["has_acted"] = False
         
         if assigned_role == "Шериф":
             game["sheriff_id"] = uid
@@ -217,19 +225,22 @@ async def run_game_start(chat_id: int, state: FSMContext, bot: Bot):
             game["intern_id"] = uid
         elif assigned_role in ["Дон Мафии", "Мафия"]:
             game["mafia_ids"].append(uid)
+        elif assigned_role == "Маньяк":
+            game["maniac_id"] = uid
 
-    # После раздачи ролей сразу запускаем ночь
     await start_night_phase(bot, chat_id, state)
 
 async def night_timer(bot: Bot, chat_id: int, state: FSMContext, night_id: int):
-    """Автоматический таймер: принудительно завершает ночь, если кто-то проспал"""
-    await asyncio.sleep(NIGHT_TIMEOUT)
+    """Неубиваемый таймер ночи: принудительно завершает ночь и расстреливает дезертиров"""
+    try:
+        await asyncio.sleep(NIGHT_TIMEOUT)
+    except asyncio.CancelledError:
+        return
     
     if game.get("active") and game.get("phase") == "night" and game.get("night_id") == night_id:
         await bot.send_message(
             chat_id,
-            "⏰ **Время ночного выбора истекло!**\n"
-            "Кто-то из ночных жителей проспал свой ход... Подводим итоги ночи.",
+            "⏰ **Время ночи истекло!** Внимание: дезертиры, не сделавшие ход, будут ликвидированы.",
             parse_mode="Markdown"
         )
         await resolve_night_phase(chat_id, state, bot)
@@ -239,11 +250,14 @@ async def start_night_phase(bot: Bot, chat_id: int, state: FSMContext):
     game["night_id"] = game.get("night_id", 0) + 1
     game["night_actions"] = {}
 
+    for uid, pdata in game["players"].items():
+        pdata["has_acted"] = False
+
     await state.set_state(GameState.night)
     await bot.send_message(
         chat_id, 
-        "🌙 **Наступила ночь.**\n"
-        f"У всех ночных ролей есть **{NIGHT_TIMEOUT} секунд**, чтобы сделать выбор в ЛС бота!", 
+        "🌙 **Наступила ночь («По законам военного времени»).**\n"
+        f"У ночных ролей есть ровно **{NIGHT_TIMEOUT} секунд**. Общий чат заблокирован для ВСЕХ.", 
         parse_mode="Markdown"
     )
     
@@ -251,14 +265,16 @@ async def start_night_phase(bot: Bot, chat_id: int, state: FSMContext):
         if pdata["alive"]:
             role = pdata["role"]
             text = f"🕵️‍♂️ Твоя роль: **{role}**\n"
-            if role == "Пеннивайз":
+            if role == "Маньяк":
+                text += "🔪 Ты Маньяк (нейтрал). Твоя цель — перебить всех и остаться последним выживлым в одиночку!"
+            elif role == "Пеннивайз":
                 text += "🎈 Твоя цель: сеять хаос! Выбирай: убить 1 игрока ИЛИ заглушить до 3 человек."
             elif role == "Эскортница":
                 text += "💋 Заблокируй ночное действие игрока и лиши его права голоса на весь день."
             elif role == "Депути":
-                text += "🛡 Ты в отряде с Шерифом. Примешь его полномочия, если он погибнет или ошибется."
+                text += "🛡 Ты в отряде с Шерифом. Примешь его полномочия, если он погибнет."
             elif role == "Интерн":
-                text += "🩺 Ты ассистируешь Доктору и унаследуешь его практику, если тот выбывает."
+                text += "🩺 Ты ассистируешь Доктору и унаследуешь его практику."
 
             try:
                 await bot.send_message(uid, text, parse_mode="Markdown")
@@ -273,6 +289,14 @@ async def start_night_phase(bot: Bot, chat_id: int, state: FSMContext):
 async def night_faction_secret_chat(message: Message, bot: Bot):
     user_id = message.from_user.id
     
+    # ТОТАЛЬНАЯ ЗАЧИСТКА ЧАТА НОЧЬЮ: сносим вообще ВСЕ сообщения в группе, включая админские
+    if message.chat.type in ["group", "supergroup"]:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+
     if user_id not in game["players"] or not game["players"][user_id]["alive"]:
         return
 
@@ -308,17 +332,6 @@ async def night_faction_secret_chat(message: Message, bot: Bot):
                 pass
             return
 
-    if message.chat.type in ["group", "supergroup"]:
-        try:
-            await message.delete()
-            await message.bot.send_message(
-                message.from_user.id, 
-                "🤫 **Ночь в городе!** Общий чат заблокирован. Командные чаты доступны только в ЛС у бота.", 
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
-
 async def send_night_menu(bot: Bot, uid: int, role: str):
     targets = [
         [InlineKeyboardButton(text=p["name"], callback_data=f"act:{uid}:{tid}")]
@@ -328,6 +341,9 @@ async def send_night_menu(bot: Bot, uid: int, role: str):
     if role in ["Дон Мафии", "Мафия"]:
         kb = InlineKeyboardMarkup(inline_keyboard=targets)
         await bot.send_message(uid, "🎯 [Чат Мафии] Выберите цель для выстрела:", reply_markup=kb)
+    elif role == "Маньяк":
+        kb = InlineKeyboardMarkup(inline_keyboard=targets)
+        await bot.send_message(uid, "🔪 [Одиночка] Выберите жертву для расправы:", reply_markup=kb)
     elif role == "Доктор":
         kb = InlineKeyboardMarkup(inline_keyboard=targets)
         await bot.send_message(uid, "🩺 [Мед. Кабинет] Выберите, кого исцелить этой ночью:", reply_markup=kb)
@@ -380,12 +396,19 @@ async def cb_pennywise_mode(callback: CallbackQuery):
 async def cb_generic_action(callback: CallbackQuery):
     _, actor_id, target_id = callback.data.split(":")
     actor_id, target_id = int(actor_id), int(target_id)
+    
+    if actor_id in game["players"]:
+        game["players"][actor_id]["has_acted"] = True
+
     role = game["players"][actor_id]["role"]
     t_name = game["players"][target_id]["name"]
     
     if "Мафия" in role or role == "Дон Мафии":
         game["night_actions"]["mafia_target"] = target_id
         await notify_team(callback.bot, game["mafia_ids"], f"🩸 **[Чат Мафии]** Наведен прицел на игрока: **{t_name}**")
+    elif role == "Маньяк":
+        game["night_actions"]["maniac_target"] = target_id
+        await callback.answer(f"Вы выбрали жертву: {t_name}")
     elif role == "Доктор":
         game["night_actions"]["doc_target"] = target_id
         await notify_team(callback.bot, [game["doctor_id"], game["intern_id"]], f"🩺 **[Мед. Кабинет]** Доктор решил исцелить: **{t_name}**")
@@ -398,6 +421,8 @@ async def cb_generic_action(callback: CallbackQuery):
 async def cb_sheriff_action(callback: CallbackQuery):
     _, uid, mode, target_id = callback.data.split(":")
     uid, target_id = int(uid), int(target_id)
+    game["players"][int(uid)]["has_acted"] = True
+    
     target_p = game["players"][target_id]
     police_team = [game["sheriff_id"], game["deputy_id"]]
 
@@ -416,6 +441,7 @@ async def cb_sheriff_action(callback: CallbackQuery):
 async def cb_pennywise_action(callback: CallbackQuery):
     _, uid, mode, target_id = callback.data.split(":")
     uid, target_id = int(uid), int(target_id)
+    game["players"][int(uid)]["has_acted"] = True
     
     if mode == "kill":
         game["night_actions"]["pennywise_kill"] = target_id
@@ -441,6 +467,7 @@ async def resolve_night_phase(chat_id: int, state: FSMContext, bot: Bot):
 
     actions = game["night_actions"]
     mafia_target = actions.get("mafia_target")
+    maniac_target = actions.get("maniac_target")
     doc_target = actions.get("doc_target")
     escort_target = actions.get("escort_target")
     sheriff_shot = actions.get("sheriff_shot")
@@ -457,6 +484,10 @@ async def resolve_night_phase(chat_id: int, state: FSMContext, bot: Bot):
         if mafia_target != doc_target:
             killed_tonight.add(mafia_target)
 
+    if maniac_target:
+        if maniac_target != doc_target:
+            killed_tonight.add(maniac_target)
+
     if sheriff_shot:
         if sheriff_shot != doc_target:
             killed_tonight.add(sheriff_shot)
@@ -471,10 +502,22 @@ async def resolve_night_phase(chat_id: int, state: FSMContext, bot: Bot):
     if penny_kill and penny_kill != doc_target:
         killed_tonight.add(penny_kill)
 
-    report_lines = ["🌅 **Город просыпается. Итоги ночи:**"]
+    # ЛИКВИДАЦИЯ ДЕЗЕРТИРОВ (кто не сделал ход ночью)
+    deserted_players = []
+    for uid, pdata in game["players"].items():
+        if pdata["alive"] and not pdata["has_acted"]:
+            pdata["alive"] = False
+            deserted_players.append(pdata["name"])
+            killed_tonight.add(uid)
+
+    report_lines = ["🌅 **Город просыпается. Итоги ночи (Под военным трибуналом):**"]
     for uid in killed_tonight:
-        game["players"][uid]["alive"] = False
-        report_lines.append(f"❌ Убит: **{game['players'][uid]['name']}**")
+        if uid in game["players"] and not game["players"][uid]["alive"] and uid not in [p for p in game["players"] if game["players"][p]["name"] in deserted_players]:
+            game["players"][uid]["alive"] = False
+            report_lines.append(f"❌ Убит ночью: **{game['players'][uid]['name']}**")
+
+    for name in deserted_players:
+        report_lines.append(f"☠️ **{name}** расстрелян за дезертирство (проспал ночной ход)!")
 
     if len(killed_tonight) == 0:
         report_lines.append("✨ Ночь прошла спокойно, никто не погиб.")
@@ -492,8 +535,8 @@ async def start_day_discussion(bot: Bot, chat_id: int, state: FSMContext):
     await state.set_state(GameState.day_discussion)
     await bot.send_message(
         chat_id, 
-        f"☀️ **Наступил день!** Открывается общее обсуждение.\n"
-        f"У вас есть {DISCUSSION_TIMEOUT} секунд на дебаты и поиск подозреваемых.", 
+        f"☀️ **Наступил день!** Общий чат разблокирован.\n"
+        f"У вас есть {DISCUSSION_TIMEOUT} секунд на дебаты.", 
         parse_mode="Markdown"
     )
     await asyncio.sleep(DISCUSSION_TIMEOUT)
@@ -575,14 +618,22 @@ async def resolve_voting(bot: Bot, chat_id: int, state: FSMContext):
 async def check_win_conditions(bot: Bot, chat_id: int, state: FSMContext) -> bool:
     alive_players = [uid for uid, p in game["players"].items() if p["alive"]]
     mafia_alive = [uid for uid in alive_players if game["players"][uid]["role"] in ["Мафия", "Дон Мафии"]]
-    peaceful_alive = [uid for uid in alive_players if uid not in mafia_alive]
+    maniac_alive = [uid for uid in alive_players if game["players"][uid]["role"] == "Маньяк"]
+    peaceful_alive = [uid for uid in alive_players if uid not in mafia_alive and uid not in maniac_alive]
 
-    if not mafia_alive:
+    # Условия победы Маньяка (остался один на один со всеми или вырезал всех остальных)
+    if game["maniac_id"] and game["maniac_id"] in alive_players and len(alive_players) == 1:
         game["active"] = False
-        await bot.send_message(chat_id, "🏆 **Мирные жители победили!** Вся мафия уничтожена.", parse_mode="Markdown")
+        await bot.send_message(chat_id, "🔪🏆 **Маньяк победил!** Он устранил абсолютно всех конкурентов и устроил в городе единоливую бойню.", parse_mode="Markdown")
         await state.clear()
         return True
-    elif len(mafia_alive) >= len(peaceful_alive):
+
+    if not mafia_alive and not maniac_alive:
+        game["active"] = False
+        await bot.send_message(chat_id, "🏆 **Мирные жители победили!** Вся угроза уничтожена.", parse_mode="Markdown")
+        await state.clear()
+        return True
+    elif len(mafia_alive) >= len(peaceful_alive) + len(maniac_alive):
         game["active"] = False
         await bot.send_message(chat_id, "🩸 **Мафия победила!** Город захвачен преступниками.", parse_mode="Markdown")
         await state.clear()
