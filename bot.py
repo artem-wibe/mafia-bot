@@ -2,13 +2,16 @@
 import asyncio
 import logging
 import random
+import re
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery, ChatPermissions
 
-TOKEN = "8619385160:AAGojtV7nGKreWXJaQezCxCW_T_m3PaSo74"
+TOKEN = "8653536551:AAHjQEJeJWV4imu1QDdrwDZo_nzjzGTF8l8"
+CREATOR_ID = 6169192086   # Твой Telegram ID (Уровень 4 - Создатель)
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
@@ -41,6 +44,172 @@ async def unlicensed_chat_guard(message: Message, bot: Bot):
         
         return
 # ======================================================================================
+
+# ==================== БАЗА УРОВНЕЙ МОДЕРАТОРА ====================
+MODERATOR_LEVELS = {
+    CREATOR_ID: 4
+}
+
+def parse_time(time_str: str) -> int:
+    match = re.match(r"^(\d+)([mhd])$", time_str)
+    if not match:
+        return 0
+    amount, unit = int(match.group(1)), match.group(2)
+    if unit == "m":
+        return amount * 60
+    elif unit == "h":
+        return amount * 3600
+    elif unit == "d":
+        return amount * 86400
+    return 0
+
+def get_user_level(user_id: int) -> int:
+    if user_id == CREATOR_ID:
+        return 4
+    return MODERATOR_LEVELS.get(user_id, 0)
+
+# ==================== КОМАНДЫ МОДЕРАЦИИ И ИЕРАРХИЯ ====================
+
+@router.message(Command("setlevel"))
+async def cmd_setlevel(message: Message):
+    actor_level = get_user_level(message.from_user.id)
+    if actor_level < 3:
+        await message.reply("⛔ Недостаточно прав. Назначать уровни могут только Главмодеры и Создатель.")
+        return
+
+    if not message.reply_to_message:
+        await message.reply("📌 Эту команду нужно использовать ответом на сообщение пользователя.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        await message.reply("⚙️ Укажите уровень от 0 до 3. Пример: `/setlevel 2`", parse_mode="Markdown")
+        return
+
+    new_level = int(args[1])
+    if new_level > 3 and actor_level != 4:
+        await message.reply("❌ Вы не можете назначить уровень выше своего или выдать Создателя.")
+        return
+
+    target_user = message.reply_to_message.from_user
+    if target_user.id == CREATOR_ID:
+        await message.reply("⚠️ Нельзя изменить уровень Создателя системы.")
+        return
+
+    MODERATOR_LEVELS[target_user.id] = new_level
+    level_names = {0: "Участник", 1: "Младший модератор", 2: "Старший модератор", 3: "Главный модератор"}
+    await message.answer(
+        f"✅ Пользователю **{target_user.full_name}** присвоен ранг: *{level_names.get(new_level, 'Неизвестно')}* (Уровень {new_level})",
+        parse_mode="Markdown"
+    )
+
+@router.message(Command("warn"))
+async def cmd_warn(message: Message):
+    if get_user_level(message.from_user.id) < 1:
+        await message.reply("⛔ Требуется как минимум 1-й уровень модерации (Мл. модератор).")
+        return
+
+    if not message.reply_to_message:
+        await message.reply("📌 Ответьте на сообщение нарушителя для выдачи предупреждения.")
+        return
+
+    target_user = message.reply_to_message.from_user
+    await message.answer(f"⚠️ **Внимание!** Пользователь **{target_user.full_name}** получил предупреждение от модератора.", parse_mode="Markdown")
+
+@router.message(Command("mute"))
+async def cmd_mute(message: Message, bot: Bot):
+    if get_user_level(message.from_user.id) < 2:
+        await message.reply("⛔ Требуется 2-й уровень модерации (Старший модератор).")
+        return
+
+    if not message.reply_to_message:
+        await message.reply("📌 Ответьте на сообщение пользователя, которого нужно замутить.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("⏱ Укажите время мута. Пример: `/mute 30m` (минуты), `/mute 2h` (часы)", parse_mode="Markdown")
+        return
+
+    duration = parse_time(args[1])
+    if duration == 0:
+        await message.reply("❌ Неверный формат времени. Используйте суффиксы `m`, `h` или `d`.")
+        return
+
+    target_user = message.reply_to_message.from_user
+    try:
+        await bot.restrict_chat_member(
+            chat_id=message.chat.id,
+            user_id=target_user.id,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=datetime.now() + timedelta(seconds=duration)
+        )
+        await message.answer(f"🔇 Пользователь **{target_user.full_name}** лишен права голоса на `{args[1]}`.", parse_mode="Markdown")
+    except Exception:
+        await message.reply("❌ Ошибка: возможно, целевой пользователь является администратором чата.")
+
+@router.message(Command("unmute"))
+async def cmd_unmute(message: Message, bot: Bot):
+    if get_user_level(message.from_user.id) < 2:
+        await message.reply("⛔ Требуется 2-й уровень модерации.")
+        return
+
+    if not message.reply_to_message:
+        await message.reply("📌 Ответьте на сообщение пользователя для снятия мута.")
+        return
+
+    target_user = message.reply_to_message.from_user
+    try:
+        await bot.restrict_chat_member(
+            chat_id=message.chat.id,
+            user_id=target_user.id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+        )
+        await message.answer(f"🔊 С пользователя **{target_user.full_name}** сняты ограничения голоса.", parse_mode="Markdown")
+    except Exception:
+        await message.reply("❌ Не удалось снять мут.")
+
+@router.message(Command("ban"))
+async def cmd_ban(message: Message, bot: Bot):
+    if get_user_level(message.from_user.id) < 3:
+        await message.reply("⛔ Доступно только Главмодераторам и Создателю (3-й уровень).")
+        return
+
+    if not message.reply_to_message:
+        await message.reply("📌 Ответьте на сообщение нарушителя для изгнания.")
+        return
+
+    target_user = message.reply_to_message.from_user
+    try:
+        await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user.id)
+        await message.answer(f"🔨 Пользователь **{target_user.full_name}** изгнан из чата.", parse_mode="Markdown")
+    except Exception:
+        await message.reply("❌ Ошибка бана. Проверьте права администратора у бота.")
+
+@router.message(Command("unban"))
+async def cmd_unban(message: Message, bot: Bot):
+    if get_user_level(message.from_user.id) < 3:
+        await message.reply("⛔ Требуется 3-й уровень модерации.")
+        return
+
+    if not message.reply_to_message:
+        await message.reply("📌 Ответьте на сообщение пользователя для разбана.")
+        return
+
+    target_user = message.reply_to_message.from_user
+    try:
+        await bot.unban_chat_member(chat_id=message.chat.id, user_id=target_user.id, only_if_banned=True)
+        await message.answer(f"🔓 Пользователь **{target_user.full_name}** амнистирован.", parse_mode="Markdown")
+    except Exception:
+        await message.reply("❌ Не удалось разбанить пользователя.")
+
+
+# ==================== ИГРОВАЯ ЛОГИКА: МАФИЯ ====================
 
 class GameState(StatesGroup):
     lobby = State()
@@ -80,7 +249,7 @@ async def cmd_start(message: Message, bot: Bot):
     if message.chat.type == "private":
         await message.answer("✅ **Бот успешно активирован в ЛС!** Теперь вы будете получать сюда свои роли и ночные меню во время игры в группе.", parse_mode="Markdown")
     else:
-        await message.answer("👋 Мафия-бот готов к работе! Наберите /create_game для запуска лобби.")
+        await message.answer("👋 Бот-модератор и Мафия готовы к работе! Наберите /create_game для запуска лобби.")
 
 @router.message(Command("create_game"))
 async def cmd_create_game(message: Message, state: FSMContext):
@@ -285,7 +454,7 @@ async def start_night_phase(bot: Bot, chat_id: int, state: FSMContext):
             except Exception:
                 await bot.send_message(
                     chat_id, 
-                    f"⚠️ Игрок **{pdata['name']}** не активировал бота в ЛС (@MyServerMafiaBot) и пропускает свой ход!"
+                    f"⚠️ Игрок **{pdata['name']}** не активировал бота в ЛС и пропускает свой ход!"
                 )
                 pdata["has_acted"] = True
 
@@ -569,6 +738,7 @@ async def check_win_conditions(bot: Bot, chat_id: int, state: FSMContext) -> boo
         return True
     return False
 
+# ==================== ЗАПУСК ====================
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
