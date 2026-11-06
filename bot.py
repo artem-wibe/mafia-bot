@@ -3,15 +3,34 @@ import asyncio
 import logging
 import random
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 
 TOKEN = "8619385160:AAGojtV7nGKreWXJaQezCxCW_T_m3PaSo74"
 
+# ==================== ПАТЧ БЕЗОПАСНОСТИ: ЭКОСИСТЕМНЫЙ ФИЛЬТР ====================
+# Укажи здесь точный ID твоего официального федерального чата
+OFFICIAL_CHAT_ID = -1004376675428
+
+class OfficialChatFilter(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        chat_type = message.chat.type
+        # Личные сообщения с ботом разрешены всегда
+        if chat_type == "private":
+            return True
+        # В группах проверяем соответствие официальному ID чата
+        if chat_type in ["group", "supergroup"]:
+            return message.chat.id == OFFICIAL_CHAT_ID
+        return False
+# ==============================================================================
+
 logging.basicConfig(level=logging.INFO)
 router = Router()
+
+# Применяем фильтр безопасности ко всем входящим сообщениям в роутере
+router.message.filter(OfficialChatFilter())
 
 class GameState(StatesGroup):
     lobby = State()
@@ -175,7 +194,7 @@ async def run_game_start(chat_id: int, state: FSMContext, bot: Bot):
     if total_players >= 8:
         roles_pool.append("Интерн")
 
-    roles_pool.append("Эскортница")
+    roles_pool.append("Путана")
     
     if total_players >= 5:
         roles_pool.append("Маньяк")
@@ -245,7 +264,7 @@ async def start_night_phase(bot: Bot, chat_id: int, state: FSMContext):
             text = f"🕵️‍♂️ Твоя роль: **{role}**\n"
             if role == "Маньяк":
                 text += "🔪 Цель: устранить всех и остаться последним выжившим!"
-            elif role == "Эскортница":
+            elif role == "Путана":
                 text += "💋 Заблокируй ночное действие игрока."
             elif role == "Шериф":
                 text += "🤠 Проверяй игроков или делай выстрел."
@@ -333,7 +352,7 @@ async def send_night_menu(bot: Bot, uid: int, role: str):
     elif role == "Доктор":
         kb = InlineKeyboardMarkup(inline_keyboard=targets)
         await bot.send_message(uid, "🩺 Выберите, кого исцелить:", reply_markup=kb)
-    elif role == "Эскортница":
+    elif role == "Путана":
         kb = InlineKeyboardMarkup(inline_keyboard=targets)
         await bot.send_message(uid, "💋 Выберите цель для блокировки:", reply_markup=kb)
     elif role == "Шериф":
@@ -372,7 +391,7 @@ async def cb_generic_action(callback: CallbackQuery):
         game["night_actions"]["maniac_target"] = target_id
     elif role == "Доктор":
         game["night_actions"]["doc_target"] = target_id
-    elif role == "Эскортница":
+    elif role == "Путана":
         game["night_actions"]["escort_target"] = target_id
     
     await callback.answer("Действие зафиксировано!")
