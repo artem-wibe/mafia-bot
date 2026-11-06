@@ -208,6 +208,113 @@ async def cmd_unban(message: Message, bot: Bot):
     except Exception:
         await message.reply("❌ Не удалось разбанить пользователя.")
 
+# ==================== СИСТЕМА НАСТРОЕК (SETTINGS MENU) ====================
+
+# Дефолтные настройки по умолчанию
+BOT_SETTINGS = {
+    "mute_default": "1h",       # По умолчанию мут на 1 час
+    "ban_default": "1d",        # По умолчанию бан на 1 день
+    "warn_limit": 3             # Лимит варнов до автоматического бана
+}
+
+class SettingsStates(StatesGroup):
+    menu = State()
+
+# Главная команда /settings (Только ЛС, уровень >= 3)
+@router.message(Command("settings"))
+async def cmd_settings(message: Message, state: FSMContext):
+    if message.chat.type != "private":
+        await message.reply("🔒 Настройки экосистемы доступны только в Личных сообщениях с ботом для обеспечения безопасности.")
+        return
+
+    actor_level = get_user_level(message.from_user.id)
+    if actor_level < 3:
+        await message.reply("⛔ Недостаточно прав. Меню настроек доступно только Главмодераторам и Создателю.")
+        return
+
+    await state.set_state(SettingsStates.menu)
+    await show_settings_main_menu(message)
+
+async def show_settings_main_menu(message: Message, edit: bool = False):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"🔇 Мут по умолчанию: {BOT_SETTINGS['mute_default']}", callback_data="set_menu:mute")],
+        [InlineKeyboardButton(text=f"🔨 Бан по умолчанию: {BOT_SETTINGS['ban_default']}", callback_data="set_menu:ban")],
+        [InlineKeyboardButton(text=f"⚠️ Лимит варнов до бана: {BOT_SETTINGS['warn_limit']}", callback_data="set_menu:warn")],
+        [InlineKeyboardButton(text="❌ Закрыть меню", callback_data="set_menu:close")]
+    ])
+    
+    text = "⚙️ **Панель управления и настроек экосистемы**\nВыберите параметр для изменения:"
+    if edit:
+        await message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+# Навигация по меню настроек через Callback
+@router.callback_query(F.data.startswith("set_menu:"))
+async def cb_settings_navigation(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split(":")[1]
+    
+    if action == "close":
+        await callback.message.delete()
+        await state.clear()
+        await callback.answer("Меню закрыто.")
+        return
+
+    if action == "main":
+        await show_settings_main_menu(callback.message, edit=True)
+        await callback.answer()
+        return
+
+    if action == "mute":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="1 час", callback_data="set_val:mute:1h"), InlineKeyboardButton(text="12 часов", callback_data="set_val:mute:12h")],
+            [InlineKeyboardButton(text="1 день", callback_data="set_val:mute:1d"), InlineKeyboardButton(text="3 дня", callback_data="set_val:mute:3d")],
+            [InlineKeyboardButton(text="1 неделя", callback_data="set_val:mute:1w"), InlineKeyboardButton(text="30 дней", callback_data="set_val:mute:30d")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="set_menu:main")]
+        ])
+        await callback.message.edit_text("⏱ **Выберите стандартный срок мута:**", reply_markup=kb, parse_mode="Markdown")
+
+    elif action == "ban":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="1 час", callback_data="set_val:ban:1h"), InlineKeyboardButton(text="12 часов", callback_data="set_val:ban:12h")],
+            [InlineKeyboardButton(text="1 день", callback_data="set_val:ban:1d"), InlineKeyboardButton(text="3 дня", callback_data="set_val:ban:3d")],
+            [InlineKeyboardButton(text="1 неделя", callback_data="set_val:ban:1w"), InlineKeyboardButton(text="30 дней", callback_data="set_val:ban:30d")],
+            [InlineKeyboardButton(text="♾ Навсегда", callback_data="set_val:ban:forever")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="set_menu:main")]
+        ])
+        await callback.message.edit_text("⏱ **Выберите стандартный срок бана:**", reply_markup=kb, parse_mode="Markdown")
+
+    elif action == "warn":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="2", callback_data="set_val:warn:2"),
+                InlineKeyboardButton(text="3", callback_data="set_val:warn:3"),
+                InlineKeyboardButton(text="4", callback_data="set_val:warn:4"),
+                InlineKeyboardButton(text="5", callback_data="set_val:warn:5")
+            ],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="set_menu:main")]
+        ])
+        await callback.message.edit_text("⚠️ **Выберите лимит варнов до автоматического бана:**", reply_markup=kb, parse_mode="Markdown")
+    
+    await callback.answer()
+
+# Сохранение выбранных значений
+@router.callback_query(F.data.startswith("set_val:"))
+async def cb_settings_save(callback: CallbackQuery):
+    _, category, value = callback.data.split(":")
+    
+    if category == "mute":
+        BOT_SETTINGS["mute_default"] = value
+        await callback.answer(f"✅ Мут по умолчанию изменен на: {value}")
+    elif category == "ban":
+        BOT_SETTINGS["ban_default"] = value
+        await callback.answer(f"✅ Бан по умолчанию изменен на: {value}")
+    elif category == "warn":
+        BOT_SETTINGS["warn_limit"] = int(value)
+        await callback.answer(f"✅ Лимит варнов изменен на: {value}")
+
+    await show_settings_main_menu(callback.message, edit=True)
+
 
 # ==================== ИГРОВАЯ ЛОГИКА: МАФИЯ ====================
 
