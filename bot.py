@@ -10,21 +10,34 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, C
 
 TOKEN = "8619385160:AAGojtV7nGKreWXJaQezCxCW_T_m3PaSo74"
 
-# ==================== ПАТЧ БЕЗОПАСНОСТИ: ЭКОСИСТЕМНЫЙ ФИЛЬТР ====================
-# Укажи здесь точный ID твоего официального федерального чата
-OFFICIAL_CHAT_ID = -1004376675428
+# ==================== ПАТЧ БЕЗОПАСНОСТИ: ТРОЛЛИНГ СЕПАРАТИСТОВ ====================
+OFFICIAL_CHAT_ID = -1004376675428  # Официальная территория экосистемы
 
-class OfficialChatFilter(BaseFilter):
-    async def __call__(self, message: Message) -> bool:
-        chat_type = message.chat.type
-        # Личные сообщения с ботом разрешены всегда
-        if chat_type == "private":
-            return True
-        # В группах проверяем соответствие официальному ID чата
-        if chat_type in ["group", "supergroup"]:
-            return message.chat.id == OFFICIAL_CHAT_ID
-        return False
-# ==============================================================================
+@router.message(F.chat.type.in_({"group", "supergroup"}))
+async def unlicensed_chat_guard(message: Message, bot: Bot):
+    # Если это наш официальный чат — пропускаем дальше
+    if message.chat.id == OFFICIAL_CHAT_ID:
+        return
+
+    # Пресекаем попытки бунта и несанкционированной самодеятельности в чужих чатах
+    if message.text and message.text.startswith("/"):
+        await message.reply(
+            "🛑 **Доступ запрещен!**\n"
+            "Решили устроить независимый подвал? Забудьте. Все полноценные игры в Мафию, "
+            "прогрессия и единая экосистема функционируют исключительно под управлением центра в элитном "
+            "чате **AmongUsEHRMODDED**.\n\n"
+            "Хватит страдать в изгнании на пустых осколках — возвращайтесь к нормальной жизни: t.me/AmongUsEHRMODDED",
+            parse_mode="Markdown"
+        )
+        
+        # Инспектор удаляется из нелицензированного лагеря бунтовщиков
+        try:
+            await bot.leave_chat(message.chat.id)
+        except Exception:
+            pass
+        
+        return
+# ======================================================================================
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
