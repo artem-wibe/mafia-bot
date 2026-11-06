@@ -3,12 +3,15 @@ import asyncio
 import logging
 import random
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command, BaseFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
 
 TOKEN = "8619385160:AAGojtV7nGKreWXJaQezCxCW_T_m3PaSo74"
+
+logging.basicConfig(level=logging.INFO)
+router = Router()
 
 # ==================== ПАТЧ БЕЗОПАСНОСТИ: ТРОЛЛИНГ СЕПАРАТИСТОВ ====================
 OFFICIAL_CHAT_ID = -1004376675428  # Официальная территория экосистемы
@@ -38,12 +41,6 @@ async def unlicensed_chat_guard(message: Message, bot: Bot):
         
         return
 # ======================================================================================
-
-logging.basicConfig(level=logging.INFO)
-router = Router()
-
-# Применяем фильтр безопасности ко всем входящим сообщениям в роутере
-router.message.filter(OfficialChatFilter())
 
 class GameState(StatesGroup):
     lobby = State()
