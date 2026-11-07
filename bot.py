@@ -31,7 +31,7 @@ class UserCacheMiddleware(BaseMiddleware):
             USER_CACHE[event.from_user.username.lower()] = event.from_user.id
         return await handler(event, data)
 
-# Регистрируем middleware для роутера
+# Регистрируем middleware для всех сообщений в роутере
 router.message.middleware(UserCacheMiddleware())
 
 # ==================== БАЗОВЫЕ НАСТРОЙКИ ЭКОСИСТЕМЫ ====================
@@ -1017,7 +1017,11 @@ async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
+    
+    # Сбрасываем зависшие вебхуки при запуске, чтобы polling работал стабильно
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    logging.info("Бот запущен и начинает опрос (polling)...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
