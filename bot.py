@@ -52,7 +52,7 @@ USER_CACHE = {}
 
 
 # ==================== ПАТЧ БЕЗОПАСНОСТИ: ТРОЛЛИНГ СЕПАРАТИСТОВ ====================
-OFFICIAL_CHAT_ID = -1004641590126  # Официальная территория экосистемы
+OFFICIAL_CHAT_ID = -1004641590126 # Официальная территория экосистемы
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))
 async def unlicensed_chat_guard(message: Message, bot: Bot):
