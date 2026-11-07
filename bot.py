@@ -4,11 +4,12 @@ import logging
 import random
 import re
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery, ChatPermissions
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery, ChatPermissions, TelegramObject
+from typing import Callable, Dict, Any, Awaitable
 
 TOKEN = "8653536551:AAHjQEJeJWV4imu1QDdrwDZo_nzjzGTF8l8"
 CREATOR_ID = 6169192086   # Твой Telegram ID (Уровень 4 - Создатель)
@@ -16,14 +17,9 @@ CREATOR_ID = 6169192086   # Твой Telegram ID (Уровень 4 - Созда�
 logging.basicConfig(level=logging.INFO)
 router = Router()
 
-from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
-from typing import Callable, Dict, Any, Awaitable
+# ==================== КЭШ ЮЗЕРНЕЙМОВ И MIDDLEWARE ====================
+USER_CACHE = {}  # Единый словарь кэша { "username_lowercase": user_id }
 
-# Словарь для кэша юзернеймов
-USER_CACHE = {}
-
-# Middleware для фонового сбора юзернеймов (не блокирует команды!)
 class UserCacheMiddleware(BaseMiddleware):
     async def __call__(
         self,
@@ -35,21 +31,15 @@ class UserCacheMiddleware(BaseMiddleware):
             USER_CACHE[event.from_user.username.lower()] = event.from_user.id
         return await handler(event, data)
 
-# Регистрируем middleware для всех сообщений в роутере
+# Регистрируем middleware для роутера
 router.message.middleware(UserCacheMiddleware())
 
-# ==================== БАЗОВЫЕ НАСТРОЙКИ И КЭШ (ВЫНЕСЕНЫ НАВЕРХ) ====================
-
-# Дефолтные настройки экосистемы (объявлены заранее, чтобы модерация их видела)
+# ==================== БАЗОВЫЕ НАСТРОЙКИ ЭКОСИСТЕМЫ ====================
 BOT_SETTINGS = {
     "mute_default": "1h",       # По умолчанию мут на 1 час
     "ban_default": "1d",        # По умолчанию бан на 1 день
     "warn_limit": 3             # Лимит варнов до автоматического бана
 }
-
-# Кэш пользователей для поиска по @username (сохраняет { "username_lowercase": user_id })
-USER_CACHE = {}
-
 
 # ==================== ПАТЧ БЕЗОПАСНОСТИ: ТРОЛЛИНГ СЕПАРАТИСТОВ ====================
 OFFICIAL_CHAT_ID = -1004641590126 # Официальная территория экосистемы
@@ -60,15 +50,15 @@ async def unlicensed_chat_guard(message: Message, bot: Bot):
         return
 
     if message.text and message.text.startswith("/"):
-        await message.reply(
-            "🛑 **Доступ запрещен!**\n"
-            "Решили устроить независимый подвал? Забудьте. Все полноценные игры в Мафию, "
-            "прогрессия и единая экосистема функционируют исключительно под управлением центра в элитном "
-            "чате **AmongUsEHRMODDED**.\n\n"
-            "Хватит страдать в изгнании на пустых осколках — возвращайтесь к нормальной жизни: t.me/AmongUsEHRMODDED",
-            parse_mode="Markdown"
-        )
         try:
+            await message.reply(
+                "🛑 **Доступ запрещен!**\n"
+                "Решили устроить независимый подвал? Забудьте. Все полноценные игры в Мафию, "
+                "прогрессия и единая экосистема функционируют исключительно под управлением центра в элитном "
+                "чате **AmongUsEHRMODDED**.\n\n"
+                "Хватит страдать в изгнании на пустых осколках — возвращайтесь к нормальной жизни: t.me/AmongUsEHRMODDED",
+                parse_mode="Markdown"
+            )
             await bot.leave_chat(message.chat.id)
         except Exception:
             pass
@@ -120,10 +110,8 @@ async def cmd_setlevel(message: Message):
         target_username = args[1].lstrip("@").lower()
         if target_username in USER_CACHE:
             target_user_id = USER_CACHE[target_username]
-            # Создаем фейковый объект или подтягиваем имя (для логирования)
             if args[2].isdigit():
                 new_level = int(args[2])
-                # Временно зафиксируем уровень по ID напрямую
                 if target_user_id == CREATOR_ID:
                     await message.reply("⚠️ Нельзя изменить уровень Создателя системы.")
                     return
@@ -159,9 +147,8 @@ async def cmd_setlevel(message: Message):
         )
 
 
-# ==================== СИСТЕМА МОДЕРАЦИИ (WARN => UNWARN => MUTE => UNMUTE => BAN => UNBAN) ====================
+# ==================== СИСТЕМА МОДЕРАЦИИ ====================
 
-# 1. ПРЕДУПРЕЖДЕНИЕ (WARN)
 @router.message(Command("warn"))
 async def cmd_warn(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 2:
@@ -194,8 +181,6 @@ async def cmd_warn(message: Message, bot: Bot):
         parse_mode="Markdown"
     )
 
-
-# 2. СНЯТИЕ ПРЕДУПРЕЖДЕНИЯ (UNWARN)
 @router.message(Command("unwarn"))
 async def cmd_unwarn(message: Message):
     if get_user_level(message.from_user.id) < 2:
@@ -215,8 +200,6 @@ async def cmd_unwarn(message: Message):
 
     await message.answer(f"🔄 С пользователя **{target_name}** снято одно предупреждение.", parse_mode="Markdown")
 
-
-# 3. МУТ (С ДЕФОЛТОМ, ПРИЧИНОЙ И ПОДДЕРЖКОЙ @USERNAME)
 @router.message(Command("mute"))
 async def cmd_mute(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 2:
@@ -279,8 +262,6 @@ async def cmd_mute(message: Message, bot: Bot):
     except Exception:
         await message.reply("❌ Ошибка: не удалось ограничить пользователя (возможно, это администратор).")
 
-
-# 4. СНЯТИЕ МУТА (UNMUTE)
 @router.message(Command("unmute"))
 async def cmd_unmute(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 2:
@@ -321,8 +302,6 @@ async def cmd_unmute(message: Message, bot: Bot):
     except Exception:
         await message.reply("❌ Не удалось снять мут.")
 
-
-# 5. БАН (С ДЕФОЛТОМ, ПРИЧИНОЙ И ПОДДЕРЖКОЙ @USERNAME)
 @router.message(Command("ban"))
 async def cmd_ban(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 3:
@@ -390,8 +369,6 @@ async def cmd_ban(message: Message, bot: Bot):
     except Exception:
         await message.reply("❌ Ошибка бана. Проверьте права администратора у бота.")
 
-
-# 6. РАЗБАН (UNBAN)
 @router.message(Command("unban"))
 async def cmd_unban(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 3:
@@ -776,26 +753,6 @@ async def start_night_phase(bot: Bot, chat_id: int, state: FSMContext):
                 pdata["has_acted"] = True
 
     asyncio.create_task(night_timer(bot, chat_id, state, game["night_id"]))
-
-@router.message(F.chat.type.in_({"group", "supergroup"}))
-async def global_chat_filter(message: Message):
-    if not game.get("active"):
-        return
-    
-    user_id = message.from_user.id
-    if user_id in game["players"]:
-        if not game["players"][user_id]["alive"]:
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            return
-        
-        if game.get("phase") == "night":
-            try:
-                await message.delete()
-            except Exception:
-                pass
 
 @router.message(GameState.night, F.text, F.chat.type == "private")
 async def night_faction_secret_chat(message: Message, bot: Bot):
