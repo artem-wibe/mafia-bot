@@ -42,11 +42,11 @@ BOT_SETTINGS = {
 }
 
 # ==================== ПАТЧ БЕЗОПАСНОСТИ: ТРОЛЛИНГ СЕПАРАТИСТОВ ====================
-OFFICIAL_CHAT_ID = -1004376675428 # Официальная территория экосистемы
+OFFICIAL_CHAT_IDS = {-1004376675428, -1004641590126} # Официальные территории экосистемы
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))
 async def unlicensed_chat_guard(message: Message, bot: Bot):
-    if message.chat.id == OFFICIAL_CHAT_ID:
+    if message.chat.id in OFFICIAL_CHAT_IDS:
         return
 
     if message.text and message.text.startswith("/"):
@@ -618,7 +618,7 @@ async def cb_join_game(callback: CallbackQuery):
         await callback.message.edit_text(
             f"🎲 Лобби Мафии открыто!\n"
             f"👥 Участников: **{len(game['players'])}** (мин. {MIN_PLAYERS})\n\n"
-            f"📌 Нажмите кнопку 1 для активации в ЛС перед стартом!",
+            f"📌 Нажмите кнопку 1 для активации в ЛС перед старом!",
             reply_markup=callback.message.reply_markup,
             parse_mode="Markdown"
         )
@@ -973,7 +973,7 @@ async def resolve_voting(bot: Bot, chat_id: int, state: FSMContext):
             chat_id, 
             f"⚖️ **Результаты голосования:** Большинством голосов исключен **{p_name}**!\n"
             f"🔍 *{p_name}* {reveal_text}", 
-            parse_mode="Markdown"
+            parse_Mode="Markdown"
         )
         
         try:
@@ -1018,9 +1018,7 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     
-    # Сбрасываем зависшие вебхуки при запуске, чтобы polling работал стабильно
     await bot.delete_webhook(drop_pending_updates=True)
-    
     logging.info("Бот запущен и начинает опрос (polling)...")
     await dp.start_polling(bot)
 
