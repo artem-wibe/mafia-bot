@@ -16,6 +16,28 @@ CREATOR_ID = 6169192086   # Твой Telegram ID (Уровень 4 - Созда�
 logging.basicConfig(level=logging.INFO)
 router = Router()
 
+from aiogram import BaseMiddleware
+from aiogram.types import TelegramObject
+from typing import Callable, Dict, Any, Awaitable
+
+# Словарь для кэша юзернеймов
+USER_CACHE = {}
+
+# Middleware для фонового сбора юзернеймов (не блокирует команды!)
+class UserCacheMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
+    ) -> Any:
+        if hasattr(event, "from_user") and event.from_user and event.from_user.username:
+            USER_CACHE[event.from_user.username.lower()] = event.from_user.id
+        return await handler(event, data)
+
+# Регистрируем middleware для всех сообщений в роутере
+router.message.middleware(UserCacheMiddleware())
+
 # ==================== БАЗОВЫЕ НАСТРОЙКИ И КЭШ (ВЫНЕСЕНЫ НАВЕРХ) ====================
 
 # Дефолтные настройки экосистемы (объявлены заранее, чтобы модерация их видела)
@@ -51,14 +73,6 @@ async def unlicensed_chat_guard(message: Message, bot: Bot):
         except Exception:
             pass
         return
-
-
-# ==================== УНИВЕРСАЛЬНЫЙ КЭШЕР ПОЛЬЗОВАТЕЛЕЙ ====================
-@router.message(F.chat.type.in_({"group", "supergroup", "private"}))
-async def cache_users_middleware(message: Message):
-    """Слушатель сообщений: запоминает user_id по username для ловли удаливших сообщения."""
-    if message.from_user and message.from_user.username:
-        USER_CACHE[message.from_user.username.lower()] = message.from_user.id
 
 
 # ==================== БАЗА УРОВНЕЙ МОДЕРАТОРА ====================
