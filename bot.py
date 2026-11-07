@@ -16,16 +16,27 @@ CREATOR_ID = 6169192086   # Твой Telegram ID (Уровень 4 - Созда�
 logging.basicConfig(level=logging.INFO)
 router = Router()
 
+# ==================== БАЗОВЫЕ НАСТРОЙКИ И КЭШ (ВЫНЕСЕНЫ НАВЕРХ) ====================
+
+# Дефолтные настройки экосистемы (объявлены заранее, чтобы модерация их видела)
+BOT_SETTINGS = {
+    "mute_default": "1h",       # По умолчанию мут на 1 час
+    "ban_default": "1d",        # По умолчанию бан на 1 день
+    "warn_limit": 3             # Лимит варнов до автоматического бана
+}
+
+# Кэш пользователей для поиска по @username (сохраняет { "username_lowercase": user_id })
+USER_CACHE = {}
+
+
 # ==================== ПАТЧ БЕЗОПАСНОСТИ: ТРОЛЛИНГ СЕПАРАТИСТОВ ====================
 OFFICIAL_CHAT_ID = -1004376675428  # Официальная территория экосистемы
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))
 async def unlicensed_chat_guard(message: Message, bot: Bot):
-    # Если это наш официальный чат — пропускаем дальше
     if message.chat.id == OFFICIAL_CHAT_ID:
         return
 
-    # Пресекаем попытки бунта и несанкционированной самодеятельности в чужих чатах
     if message.text and message.text.startswith("/"):
         await message.reply(
             "🛑 **Доступ запрещен!**\n"
@@ -35,15 +46,20 @@ async def unlicensed_chat_guard(message: Message, bot: Bot):
             "Хватит страдать в изгнании на пустых осколках — возвращайтесь к нормальной жизни: t.me/AmongUsEHRMODDED",
             parse_mode="Markdown"
         )
-        
-        # Инспектор удаляется из нелицензированного лагеря бунтовщиков
         try:
             await bot.leave_chat(message.chat.id)
         except Exception:
             pass
-        
         return
-# ======================================================================================
+
+
+# ==================== УНИВЕРСАЛЬНЫЙ КЭШЕР ПОЛЬЗОВАТЕЛЕЙ ====================
+@router.message(F.chat.type.in_({"group", "supergroup", "private"}))
+async def cache_users_middleware(message: Message):
+    """Слушатель сообщений: запоминает user_id по username для ловли удаливших сообщения."""
+    if message.from_user and message.from_user.username:
+        USER_CACHE[message.from_user.username.lower()] = message.from_user.id
+
 
 # ==================== БАЗА УРОВНЕЙ МОДЕРАТОРА ====================
 MODERATOR_LEVELS = {
@@ -68,6 +84,7 @@ def get_user_level(user_id: int) -> int:
         return 4
     return MODERATOR_LEVELS.get(user_id, 0)
 
+
 # ==================== КОМАНДЫ МОДЕРАЦИИ И ИЕРАРХИЯ ====================
 
 @router.message(Command("setlevel"))
@@ -77,41 +94,55 @@ async def cmd_setlevel(message: Message):
         await message.reply("⛔ Недостаточно прав. Назначать уровни могут только Главмодеры и Создатель.")
         return
 
-    if not message.reply_to_message:
-        await message.reply("📌 Эту команду нужно использовать ответом на сообщение пользователя.")
-        return
-
     args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        await message.reply("⚙️ Укажите уровень от 0 до 3. Пример: `/setlevel 2`", parse_mode="Markdown")
+    target_user = None
+    new_level = None
+
+    if message.reply_to_message:
+        target_user = message.reply_to_message.from_user
+        if len(args) > 1 and args[1].isdigit():
+            new_level = int(args[1])
+    elif len(args) > 2 and args[1].startswith("@"):
+        target_username = args[1].lstrip("@").lower()
+        if target_username in USER_CACHE:
+            target_user_id = USER_CACHE[target_username]
+            # Создаем фейковый объект или подтягиваем имя (для логирования)
+            if args[2].isdigit():
+                new_level = int(args[2])
+                # Временно зафиксируем уровень по ID напрямую
+                if target_user_id == CREATOR_ID:
+                    await message.reply("⚠️ Нельзя изменить уровень Создателя системы.")
+                    return
+                if new_level > 3 and actor_level != 4:
+                    await message.reply("❌ Вы не можете назначить уровень выше своего или выдать Создателя.")
+                    return
+                MODERATOR_LEVELS[target_user_id] = new_level
+                await message.answer(f"✅ Пользователю `@{target_username}` присвоен уровень {new_level}", parse_mode="Markdown")
+                return
+        else:
+            await message.reply(f"❌ Пользователь `@{target_username}` не найден в кэше бота.")
+            return
+    else:
+        await message.reply("📌 Используйте ответом на сообщение: `/setlevel 2` или по тегу: `/setlevel @username 2`", parse_mode="Markdown")
         return
 
-    new_level = int(args[1])
-    if new_level > 3 and actor_level != 4:
-        await message.reply("❌ Вы не можете назначить уровень выше своего или выдать Создателя.")
-        return
+    if target_user:
+        if new_level is None or not (0 <= new_level <= 3):
+            await message.reply("⚙️ Укажите корректный уровень от 0 до 3.")
+            return
+        if target_user.id == CREATOR_ID:
+            await message.reply("⚠️ Нельзя изменить уровень Создателя системы.")
+            return
+        if new_level > 3 and actor_level != 4:
+            await message.reply("❌ Вы не можете назначить уровень выше своего или выдать Создателя.")
+            return
 
-    target_user = message.reply_to_message.from_user
-    if target_user.id == CREATOR_ID:
-        await message.reply("⚠️ Нельзя изменить уровень Создателя системы.")
-        return
-
-    MODERATOR_LEVELS[target_user.id] = new_level
-    level_names = {0: "Участник", 1: "Младший модератор", 2: "Старший модератор", 3: "Главный модератор"}
-    await message.answer(
-        f"✅ Пользователю **{target_user.full_name}** присвоен ранг: *{level_names.get(new_level, 'Неизвестно')}* (Уровень {new_level})",
-        parse_mode="Markdown"
-    )
-
-
-# ==================== КЭШ ПОЛЬЗОВАТЕЛЕЙ (ДЛЯ ПОИСКА ПО @USERNAME) ====================
-USER_CACHE = {}  # { "username_lowercase": user_id }
-
-@router.message()
-async def cache_users_middleware(message: Message):
-    """Слушатель сообщений: запоминает user_id по username для ловли удаливших сообщения."""
-    if message.from_user and message.from_user.username:
-        USER_CACHE[message.from_user.username.lower()] = message.from_user.id
+        MODERATOR_LEVELS[target_user.id] = new_level
+        level_names = {0: "Участник", 1: "Младший модератор", 2: "Старший модератор", 3: "Главный модератор"}
+        await message.answer(
+            f"✅ Пользователю **{target_user.full_name}** присвоен ранг: *{level_names.get(new_level, 'Неизвестно')}* (Уровень {new_level})",
+            parse_mode="Markdown"
+        )
 
 
 # ==================== СИСТЕМА МОДЕРАЦИИ (WARN => UNWARN => MUTE => UNMUTE => BAN => UNBAN) ====================
@@ -124,22 +155,16 @@ async def cmd_warn(message: Message, bot: Bot):
         return
 
     args = message.text.split()
-    target_user_id = None
     target_name = "Неизвестный"
     reason = "Причина не указана"
 
-    # Вариант А: Ответ на сообщение (Reply)
     if message.reply_to_message:
-        target_user_id = message.reply_to_message.from_user.id
         target_name = message.reply_to_message.from_user.full_name
         if len(args) > 1:
             reason = message.text.split(maxsplit=1)[1]
-
-    # Вариант Б: Поиск по @username (если сообщение удалено)
     elif len(args) > 1 and args[1].startswith("@"):
         target_username = args[1].lstrip("@").lower()
         if target_username in USER_CACHE:
-            target_user_id = USER_CACHE[target_username]
             target_name = f"@{target_username}"
             reason = message.text.split(maxsplit=2)[2] if len(args) > 2 else "Причина не указана"
         else:
@@ -158,7 +183,7 @@ async def cmd_warn(message: Message, bot: Bot):
 
 # 2. СНЯТИЕ ПРЕДУПРЕЖДЕНИЯ (UNWARN)
 @router.message(Command("unwarn"))
-async def cmd_unwarn(message: Message, bot: Bot):
+async def cmd_unwarn(message: Message):
     if get_user_level(message.from_user.id) < 2:
         await message.reply("⛔ Требуется 2-й уровень модерации (Старший модератор).")
         return
@@ -191,7 +216,6 @@ async def cmd_mute(message: Message, bot: Bot):
     used_default = True
     reason = "Причина не указана"
 
-    # Вариант А: Ответ на сообщение (Reply)
     if message.reply_to_message:
         target_user_id = message.reply_to_message.from_user.id
         target_name = message.reply_to_message.from_user.full_name
@@ -202,8 +226,6 @@ async def cmd_mute(message: Message, bot: Bot):
                 reason = message.text.split(maxsplit=2)[2] if len(args) > 2 else "Причина не указана"
             else:
                 reason = message.text.split(maxsplit=1)[1]
-
-    # Вариант Б: Поиск по @username
     elif len(args) > 1 and args[1].startswith("@"):
         target_username = args[1].lstrip("@").lower()
         if target_username in USER_CACHE:
@@ -300,7 +322,6 @@ async def cmd_ban(message: Message, bot: Bot):
     used_default = True
     reason = "Причина не указана"
 
-    # Вариант А: Ответ на сообщение (Reply)
     if message.reply_to_message:
         target_user_id = message.reply_to_message.from_user.id
         target_name = message.reply_to_message.from_user.full_name
@@ -312,8 +333,6 @@ async def cmd_ban(message: Message, bot: Bot):
                 reason = message.text.split(maxsplit=2)[2] if len(args) > 2 else "Причина не указана"
             else:
                 reason = message.text.split(maxsplit=1)[1]
-
-    # Вариант Б: Поиск по @username
     elif len(args) > 1 and args[1].startswith("@"):
         target_username = args[1].lstrip("@").lower()
         if target_username in USER_CACHE:
@@ -397,17 +416,9 @@ async def cmd_unban(message: Message, bot: Bot):
 
 # ==================== СИСТЕМА НАСТРОЕК (SETTINGS MENU) ====================
 
-# Дефолтные настройки по умолчанию
-BOT_SETTINGS = {
-    "mute_default": "1h",       # По умолчанию мут на 1 час
-    "ban_default": "1d",        # По умолчанию бан на 1 день
-    "warn_limit": 3             # Лимит варнов до автоматического бана
-}
-
 class SettingsStates(StatesGroup):
     menu = State()
 
-# Главная команда /settings (Только ЛС, уровень >= 3)
 @router.message(Command("settings"))
 async def cmd_settings(message: Message, state: FSMContext):
     if message.chat.type != "private":
@@ -436,7 +447,6 @@ async def show_settings_main_menu(message: Message, edit: bool = False):
     else:
         await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
-# Навигация по меню настроек через Callback
 @router.callback_query(F.data.startswith("set_menu:"))
 async def cb_settings_navigation(callback: CallbackQuery, state: FSMContext):
     action = callback.data.split(":")[1]
@@ -485,7 +495,6 @@ async def cb_settings_navigation(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer()
 
-# Сохранение выбранных значений
 @router.callback_query(F.data.startswith("set_val:"))
 async def cb_settings_save(callback: CallbackQuery):
     _, category, value = callback.data.split(":")
@@ -514,7 +523,7 @@ class GameState(StatesGroup):
 game = {
     "active": False,
     "phase": "lobby",
-    "players": {},       # user_id: {"name": str, "role": str, "alive": bool, "has_acted": bool}
+    "players": {},       
     "night_actions": {}, 
     "votes": {},         
     "sheriff_id": None,
@@ -539,7 +548,7 @@ def get_join_keyboard():
     ])
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, bot: Bot):
+async def cmd_start(message: Message):
     if message.chat.type == "private":
         await message.answer("✅ **Бот успешно активирован в ЛС!** Теперь вы будете получать сюда свои роли и ночные меню во время игры в группе.", parse_mode="Markdown")
     else:
@@ -755,7 +764,7 @@ async def start_night_phase(bot: Bot, chat_id: int, state: FSMContext):
     asyncio.create_task(night_timer(bot, chat_id, state, game["night_id"]))
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))
-async def global_chat_filter(message: Message, bot: Bot):
+async def global_chat_filter(message: Message):
     if not game.get("active"):
         return
     
