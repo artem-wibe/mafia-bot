@@ -103,73 +103,177 @@ async def cmd_setlevel(message: Message):
         parse_mode="Markdown"
     )
 
+
+# ==================== КЭШ ПОЛЬЗОВАТЕЛЕЙ (ДЛЯ ПОИСКА ПО @USERNAME) ====================
+USER_CACHE = {}  # { "username_lowercase": user_id }
+
+@router.message()
+async def cache_users_middleware(message: Message):
+    """Слушатель сообщений: запоминает user_id по username для ловли удаливших сообщения."""
+    if message.from_user and message.from_user.username:
+        USER_CACHE[message.from_user.username.lower()] = message.from_user.id
+
+
+# ==================== СИСТЕМА МОДЕРАЦИИ (WARN => UNWARN => MUTE => UNMUTE => BAN => UNBAN) ====================
+
+# 1. ПРЕДУПРЕЖДЕНИЕ (WARN)
 @router.message(Command("warn"))
-async def cmd_warn(message: Message):
-    if get_user_level(message.from_user.id) < 1:
-        await message.reply("⛔ Требуется как минимум 1-й уровень модерации (Мл. модератор).")
+async def cmd_warn(message: Message, bot: Bot):
+    if get_user_level(message.from_user.id) < 2:
+        await message.reply("⛔ Требуется 2-й уровень модерации (Старший модератор).")
         return
 
-    if not message.reply_to_message:
-        await message.reply("📌 Ответьте на сообщение нарушителя для выдачи предупреждения.")
+    args = message.text.split()
+    target_user_id = None
+    target_name = "Неизвестный"
+    reason = "Причина не указана"
+
+    # Вариант А: Ответ на сообщение (Reply)
+    if message.reply_to_message:
+        target_user_id = message.reply_to_message.from_user.id
+        target_name = message.reply_to_message.from_user.full_name
+        if len(args) > 1:
+            reason = message.text.split(maxsplit=1)[1]
+
+    # Вариант Б: Поиск по @username (если сообщение удалено)
+    elif len(args) > 1 and args[1].startswith("@"):
+        target_username = args[1].lstrip("@").lower()
+        if target_username in USER_CACHE:
+            target_user_id = USER_CACHE[target_username]
+            target_name = f"@{target_username}"
+            reason = message.text.split(maxsplit=2)[2] if len(args) > 2 else "Причина не указана"
+        else:
+            await message.reply(f"❌ Не удалось найти `@{target_username}` в кэше бота.")
+            return
+    else:
+        await message.reply("📌 Ответьте на сообщение нарушителя или укажите его `@username`.")
         return
 
-    target_user = message.reply_to_message.from_user
-    await message.answer(f"⚠️ **Внимание!** Пользователь **{target_user.full_name}** получил предупреждение от модератора.", parse_mode="Markdown")
+    await message.answer(
+        f"⚠️ Пользователь **{target_name}** получил предупреждение.\n"
+        f"📝 **Причина:** {reason}",
+        parse_mode="Markdown"
+    )
 
-# ==================== УПРАВЛЕНИЕ МУТОМ (С ДЕФОЛТОМ ИЗ НАСТРОЕК) ====================
+
+# 2. СНЯТИЕ ПРЕДУПРЕЖДЕНИЯ (UNWARN)
+@router.message(Command("unwarn"))
+async def cmd_unwarn(message: Message, bot: Bot):
+    if get_user_level(message.from_user.id) < 2:
+        await message.reply("⛔ Требуется 2-й уровень модерации (Старший модератор).")
+        return
+
+    args = message.text.split()
+    target_name = "Неизвестный"
+
+    if message.reply_to_message:
+        target_name = message.reply_to_message.from_user.full_name
+    elif len(args) > 1 and args[1].startswith("@"):
+        target_name = args[1]
+    else:
+        await message.reply("📌 Ответьте на сообщение пользователя или укажите его `@username`.")
+        return
+
+    await message.answer(f"🔄 С пользователя **{target_name}** снято одно предупреждение.", parse_mode="Markdown")
+
+
+# 3. МУТ (С ДЕФОЛТОМ, ПРИЧИНОЙ И ПОДДЕРЖКОЙ @USERNAME)
 @router.message(Command("mute"))
 async def cmd_mute(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 2:
         await message.reply("⛔ Требуется 2-й уровень модерации (Старший модератор).")
         return
 
-    if not message.reply_to_message:
-        await message.reply("📌 Ответьте на сообщение пользователя, которого нужно замутить.")
-        return
-
     args = message.text.split()
-    if len(args) < 2:
-        time_str = BOT_SETTINGS["mute_default"]
-        used_default = True
+    target_user_id = None
+    target_name = "Неизвестный"
+    time_str = BOT_SETTINGS["mute_default"]
+    used_default = True
+    reason = "Причина не указана"
+
+    # Вариант А: Ответ на сообщение (Reply)
+    if message.reply_to_message:
+        target_user_id = message.reply_to_message.from_user.id
+        target_name = message.reply_to_message.from_user.full_name
+        if len(args) > 1:
+            if any(char in args[1].lower() for char in ['m', 'h', 'd']):
+                time_str = args[1]
+                used_default = False
+                reason = message.text.split(maxsplit=2)[2] if len(args) > 2 else "Причина не указана"
+            else:
+                reason = message.text.split(maxsplit=1)[1]
+
+    # Вариант Б: Поиск по @username
+    elif len(args) > 1 and args[1].startswith("@"):
+        target_username = args[1].lstrip("@").lower()
+        if target_username in USER_CACHE:
+            target_user_id = USER_CACHE[target_username]
+            target_name = f"@{target_username}"
+            if len(args) > 2 and any(char in args[2].lower() for char in ['m', 'h', 'd']):
+                time_str = args[2]
+                used_default = False
+                reason = message.text.split(maxsplit=3)[3] if len(args) > 3 else "Причина не указана"
+            else:
+                reason = message.text.split(maxsplit=2)[2] if len(args) > 2 else "Причина не указана"
+        else:
+            await message.reply(f"❌ Не удалось найти `@{target_username}` в кэше бота.")
+            return
     else:
-        time_str = args[1]
-        used_default = False
+        await message.reply("📌 Ответьте на сообщение нарушителя или укажите его `@username`.")
+        return
 
     duration = parse_time(time_str)
     if duration == 0:
-        await message.reply("❌ Неверный формат времени. Используйте суффиксы `m`, `h` или `d` (например, `30m`, `2h`).")
+        await message.reply("❌ Неверный формат времени. Используйте `m`, `h` или `d` (например, `30m`, `2h`).")
         return
 
-    target_user = message.reply_to_message.from_user
     try:
         await bot.restrict_chat_member(
             chat_id=message.chat.id,
-            user_id=target_user.id,
+            user_id=target_user_id,
             permissions=ChatPermissions(can_send_messages=False),
             until_date=datetime.now() + timedelta(seconds=duration)
         )
         default_note = " (по умолчанию)" if used_default else ""
-        await message.answer(f"🔇 Пользователь **{target_user.full_name}** лишен права голоса на `{time_str}`{default_note}.", parse_mode="Markdown")
+        await message.answer(
+            f"🔇 Пользователь **{target_name}** лишен права голоса на `{time_str}`{default_note}.\n"
+            f"📝 **Причина:** {reason}",
+            parse_mode="Markdown"
+        )
     except Exception:
-        await message.reply("❌ Ошибка: возможно, целевой пользователь является администратором чата.")
+        await message.reply("❌ Ошибка: не удалось ограничить пользователя (возможно, это администратор).")
 
 
-# ==================== СНЯТИЕ МУТА (UNMUTE) ====================
+# 4. СНЯТИЕ МУТА (UNMUTE)
 @router.message(Command("unmute"))
 async def cmd_unmute(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 2:
         await message.reply("⛔ Требуется 2-й уровень модерации (Старший модератор).")
         return
 
-    if not message.reply_to_message:
-        await message.reply("📌 Ответьте на сообщение пользователя, с которого нужно снять мут.")
+    args = message.text.split()
+    target_user_id = None
+    target_name = "Неизвестный"
+
+    if message.reply_to_message:
+        target_user_id = message.reply_to_message.from_user.id
+        target_name = message.reply_to_message.from_user.full_name
+    elif len(args) > 1 and args[1].startswith("@"):
+        target_username = args[1].lstrip("@").lower()
+        if target_username in USER_CACHE:
+            target_user_id = USER_CACHE[target_username]
+            target_name = f"@{target_username}"
+        else:
+            await message.reply(f"❌ Не удалось найти `@{target_username}` в кэше бота.")
+            return
+    else:
+        await message.reply("📌 Ответьте на сообщение пользователя или укажите его `@username`.")
         return
 
-    target_user = message.reply_to_message.from_user
     try:
         await bot.restrict_chat_member(
             chat_id=message.chat.id,
-            user_id=target_user.id,
+            user_id=target_user_id,
             permissions=ChatPermissions(
                 can_send_messages=True,
                 can_send_media_messages=True,
@@ -177,72 +281,118 @@ async def cmd_unmute(message: Message, bot: Bot):
                 can_add_web_page_previews=True
             )
         )
-        await message.answer(f"🔊 С пользователя **{target_user.full_name}** снят мут.", parse_mode="Markdown")
+        await message.answer(f"🔊 С пользователя **{target_name}** снят мут.", parse_mode="Markdown")
     except Exception:
-        await message.reply("❌ Не удалось снять мут. Проверьте права администратора у бота.")
+        await message.reply("❌ Не удалось снять мут.")
 
 
-# ==================== УПРАВЛЕНИЕ БАНОМ (С ДЕФОЛТОМ ИЗ НАСТРОЕК) ====================
+# 5. БАН (С ДЕФОЛТОМ, ПРИЧИНОЙ И ПОДДЕРЖКОЙ @USERNAME)
 @router.message(Command("ban"))
 async def cmd_ban(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 3:
         await message.reply("⛔ Доступно только Главмодераторам и Создателю (3-й уровень).")
         return
 
-    if not message.reply_to_message:
-        await message.reply("📌 Ответьте на сообщение нарушителя для изгнания.")
+    args = message.text.split()
+    target_user_id = None
+    target_name = "Неизвестный"
+    ban_val = BOT_SETTINGS["ban_default"]
+    used_default = True
+    reason = "Причина не указана"
+
+    # Вариант А: Ответ на сообщение (Reply)
+    if message.reply_to_message:
+        target_user_id = message.reply_to_message.from_user.id
+        target_name = message.reply_to_message.from_user.full_name
+        if len(args) > 1:
+            is_time = any(char in args[1].lower() for char in ['m', 'h', 'd']) or args[1].lower() == "forever"
+            if is_time:
+                ban_val = args[1]
+                used_default = False
+                reason = message.text.split(maxsplit=2)[2] if len(args) > 2 else "Причина не указана"
+            else:
+                reason = message.text.split(maxsplit=1)[1]
+
+    # Вариант Б: Поиск по @username
+    elif len(args) > 1 and args[1].startswith("@"):
+        target_username = args[1].lstrip("@").lower()
+        if target_username in USER_CACHE:
+            target_user_id = USER_CACHE[target_username]
+            target_name = f"@{target_username}"
+            if len(args) > 2:
+                is_time = any(char in args[2].lower() for char in ['m', 'h', 'd']) or args[2].lower() == "forever"
+                if is_time:
+                    ban_val = args[2]
+                    used_default = False
+                    reason = message.text.split(maxsplit=3)[3] if len(args) > 3 else "Причина не указана"
+                else:
+                    reason = message.text.split(maxsplit=2)[2]
+        else:
+            await message.reply(f"❌ Не удалось найти `@{target_username}` в кэше бота.")
+            return
+    else:
+        await message.reply("📌 Ответьте на сообщение нарушителя или укажите его `@username`.")
         return
 
-    args = message.text.split()
-    if len(args) < 2:
-        ban_val = BOT_SETTINGS["ban_default"]
-        used_default = True
-    else:
-        ban_val = args[1]
-        used_default = False
-
-    target_user = message.reply_to_message.from_user
     try:
         if ban_val == "forever":
-            await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user.id)
+            await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user_id)
             duration_text = "навсегда"
         else:
             duration = parse_time(ban_val)
-            if duration == 0 and ban_val != "forever":
-                await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user.id)
+            if duration == 0:
+                await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user_id)
                 duration_text = "навсегда"
             else:
-                until_date = datetime.now() + timedelta(seconds=duration) if duration > 0 else None
-                await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user.id, until_date=until_date)
+                until_date = datetime.now() + timedelta(seconds=duration)
+                await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user_id, until_date=until_date)
                 duration_text = f"на `{ban_val}`"
 
         default_note = " (по умолчанию)" if used_default else ""
-        await message.answer(f"🔨 Пользователь **{target_user.full_name}** изгнан из чата {duration_text}{default_note}.", parse_mode="Markdown")
+        await message.answer(
+            f"🔨 Пользователь **{target_name}** изгнан из чата {duration_text}{default_note}.\n"
+            f"📝 **Причина:** {reason}",
+            parse_mode="Markdown"
+        )
     except Exception:
         await message.reply("❌ Ошибка бана. Проверьте права администратора у бота.")
 
 
-# ==================== РАЗБАН (UNBAN) ====================
+# 6. РАЗБАН (UNBAN)
 @router.message(Command("unban"))
 async def cmd_unban(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 3:
         await message.reply("⛔ Требуется 3-й уровень модерации (Главмодератор).")
         return
 
-    if not message.reply_to_message:
-        await message.reply("📌 Ответьте на сообщение пользователя, которого нужно разбанить.")
+    args = message.text.split()
+    target_user_id = None
+    target_name = "Неизвестный"
+
+    if message.reply_to_message:
+        target_user_id = message.reply_to_message.from_user.id
+        target_name = message.reply_to_message.from_user.full_name
+    elif len(args) > 1 and args[1].startswith("@"):
+        target_username = args[1].lstrip("@").lower()
+        if target_username in USER_CACHE:
+            target_user_id = USER_CACHE[target_username]
+            target_name = f"@{target_username}"
+        else:
+            await message.reply(f"❌ Не удалось найти `@{target_username}` в кэше бота.")
+            return
+    else:
+        await message.reply("📌 Ответьте на сообщение пользователя или укажите его `@username`.")
         return
 
-    target_user = message.reply_to_message.from_user
     try:
         await bot.unban_chat_member(
             chat_id=message.chat.id,
-            user_id=target_user.id,
+            user_id=target_user_id,
             only_if_banned=True
         )
-        await message.answer(f"🔓 Пользователь **{target_user.full_name}** разбанен и снова может войти в чат.", parse_mode="Markdown")
+        await message.answer(f"🔓 Пользователь **{target_name}** разбанен и снова может войти в чат.", parse_mode="Markdown")
     except Exception:
-        await message.reply("❌ Не удалось разбанить пользователя. Возможно, он не был заблокирован.")
+        await message.reply("❌ Не удалось разбанить пользователя.")
 
 
 # ==================== СИСТЕМА НАСТРОЕК (SETTINGS MENU) ====================
