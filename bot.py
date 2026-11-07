@@ -116,6 +116,7 @@ async def cmd_warn(message: Message):
     target_user = message.reply_to_message.from_user
     await message.answer(f"⚠️ **Внимание!** Пользователь **{target_user.full_name}** получил предупреждение от модератора.", parse_mode="Markdown")
 
+# ==================== УПРАВЛЕНИЕ МУТОМ (С ДЕФОЛТОМ ИЗ НАСТРОЕК) ====================
 @router.message(Command("mute"))
 async def cmd_mute(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 2:
@@ -128,12 +129,15 @@ async def cmd_mute(message: Message, bot: Bot):
 
     args = message.text.split()
     if len(args) < 2:
-        await message.reply("⏱ Укажите время мута. Пример: `/mute 30m` (минуты), `/mute 2h` (часы)", parse_mode="Markdown")
-        return
+        time_str = BOT_SETTINGS["mute_default"]
+        used_default = True
+    else:
+        time_str = args[1]
+        used_default = False
 
-    duration = parse_time(args[1])
+    duration = parse_time(time_str)
     if duration == 0:
-        await message.reply("❌ Неверный формат времени. Используйте суффиксы `m`, `h` или `d`.")
+        await message.reply("❌ Неверный формат времени. Используйте суффиксы `m`, `h` или `d` (например, `30m`, `2h`).")
         return
 
     target_user = message.reply_to_message.from_user
@@ -144,18 +148,21 @@ async def cmd_mute(message: Message, bot: Bot):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=datetime.now() + timedelta(seconds=duration)
         )
-        await message.answer(f"🔇 Пользователь **{target_user.full_name}** лишен права голоса на `{args[1]}`.", parse_mode="Markdown")
+        default_note = " (по умолчанию)" if used_default else ""
+        await message.answer(f"🔇 Пользователь **{target_user.full_name}** лишен права голоса на `{time_str}`{default_note}.", parse_mode="Markdown")
     except Exception:
         await message.reply("❌ Ошибка: возможно, целевой пользователь является администратором чата.")
 
+
+# ==================== СНЯТИЕ МУТА (UNMUTE) ====================
 @router.message(Command("unmute"))
 async def cmd_unmute(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 2:
-        await message.reply("⛔ Требуется 2-й уровень модерации.")
+        await message.reply("⛔ Требуется 2-й уровень модерации (Старший модератор).")
         return
 
     if not message.reply_to_message:
-        await message.reply("📌 Ответьте на сообщение пользователя для снятия мута.")
+        await message.reply("📌 Ответьте на сообщение пользователя, с которого нужно снять мут.")
         return
 
     target_user = message.reply_to_message.from_user
@@ -170,10 +177,12 @@ async def cmd_unmute(message: Message, bot: Bot):
                 can_add_web_page_previews=True
             )
         )
-        await message.answer(f"🔊 С пользователя **{target_user.full_name}** сняты ограничения голоса.", parse_mode="Markdown")
+        await message.answer(f"🔊 С пользователя **{target_user.full_name}** снят мут.", parse_mode="Markdown")
     except Exception:
-        await message.reply("❌ Не удалось снять мут.")
+        await message.reply("❌ Не удалось снять мут. Проверьте права администратора у бота.")
 
+
+# ==================== УПРАВЛЕНИЕ БАНОМ (С ДЕФОЛТОМ ИЗ НАСТРОЕК) ====================
 @router.message(Command("ban"))
 async def cmd_ban(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 3:
@@ -184,29 +193,57 @@ async def cmd_ban(message: Message, bot: Bot):
         await message.reply("📌 Ответьте на сообщение нарушителя для изгнания.")
         return
 
+    args = message.text.split()
+    if len(args) < 2:
+        ban_val = BOT_SETTINGS["ban_default"]
+        used_default = True
+    else:
+        ban_val = args[1]
+        used_default = False
+
     target_user = message.reply_to_message.from_user
     try:
-        await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user.id)
-        await message.answer(f"🔨 Пользователь **{target_user.full_name}** изгнан из чата.", parse_mode="Markdown")
+        if ban_val == "forever":
+            await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user.id)
+            duration_text = "навсегда"
+        else:
+            duration = parse_time(ban_val)
+            if duration == 0 and ban_val != "forever":
+                await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user.id)
+                duration_text = "навсегда"
+            else:
+                until_date = datetime.now() + timedelta(seconds=duration) if duration > 0 else None
+                await bot.ban_chat_member(chat_id=message.chat.id, user_id=target_user.id, until_date=until_date)
+                duration_text = f"на `{ban_val}`"
+
+        default_note = " (по умолчанию)" if used_default else ""
+        await message.answer(f"🔨 Пользователь **{target_user.full_name}** изгнан из чата {duration_text}{default_note}.", parse_mode="Markdown")
     except Exception:
         await message.reply("❌ Ошибка бана. Проверьте права администратора у бота.")
 
+
+# ==================== РАЗБАН (UNBAN) ====================
 @router.message(Command("unban"))
 async def cmd_unban(message: Message, bot: Bot):
     if get_user_level(message.from_user.id) < 3:
-        await message.reply("⛔ Требуется 3-й уровень модерации.")
+        await message.reply("⛔ Требуется 3-й уровень модерации (Главмодератор).")
         return
 
     if not message.reply_to_message:
-        await message.reply("📌 Ответьте на сообщение пользователя для разбана.")
+        await message.reply("📌 Ответьте на сообщение пользователя, которого нужно разбанить.")
         return
 
     target_user = message.reply_to_message.from_user
     try:
-        await bot.unban_chat_member(chat_id=message.chat.id, user_id=target_user.id, only_if_banned=True)
-        await message.answer(f"🔓 Пользователь **{target_user.full_name}** амнистирован.", parse_mode="Markdown")
+        await bot.unban_chat_member(
+            chat_id=message.chat.id,
+            user_id=target_user.id,
+            only_if_banned=True
+        )
+        await message.answer(f"🔓 Пользователь **{target_user.full_name}** разбанен и снова может войти в чат.", parse_mode="Markdown")
     except Exception:
-        await message.reply("❌ Не удалось разбанить пользователя.")
+        await message.reply("❌ Не удалось разбанить пользователя. Возможно, он не был заблокирован.")
+
 
 # ==================== СИСТЕМА НАСТРОЕК (SETTINGS MENU) ====================
 
