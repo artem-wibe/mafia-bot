@@ -96,6 +96,44 @@ async def cmd_stop_game(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("🛑 Игра принудительно остановлена.")
 
+
+# ==================== ЖЕСТКИЕ ФИЛЬТРЫ И УДАЛЕНИЕ СООБЩЕНИЙ ====================
+
+@router.message(F.chat.type.in_({"group", "supergroup"}))
+async def group_message_guard(message: Message):
+    if not game["active"]:
+        return
+
+    user_id = message.from_user.id
+    current_phase = game["phase"]
+
+    # 1. АБСОЛЮТНАЯ ТИШИНА НОЧЬЮ: удаляем вообще все сообщения в группе (включая админов)
+    if current_phase == "night":
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+
+    # Если игра идет (день или обсуждение), проверяем статус игрока
+    if user_id in game["players"]:
+        player_data = game["players"][user_id]
+        # 2. МЕРТВЫЕ ИГРОКИ: удаляем сообщения погибших
+        if not player_data["alive"]:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+    else:
+        # 3. НЕИГРАЮЩИЕ УЧАСТНИКИ/ЗРИТЕЛИ: удаляем сообщения тех, кто не в игре
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+
+
 @router.callback_query(F.data == "join")
 async def cb_join_game(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -103,6 +141,10 @@ async def cb_join_game(callback: CallbackQuery):
 
     if not game["active"]:
         await callback.answer("⚠️ Лобби закрыто!", show_alert=True)
+        return
+
+    if game["phase"] != "lobby":
+        await callback.answer("⚠️ Игра уже началась, войти нельзя!", show_alert=True)
         return
 
     if user_id in game["players"]:
@@ -229,7 +271,7 @@ async def start_night_phase(bot: Bot, chat_id: int, state: FSMContext):
         await bot.send_message(
             chat_id, 
             "🌙 **Наступила ночь.**\n"
-            f"У ночных ролей есть **{NIGHT_TIMEOUT} секунд** на ход. Общий чат закрыт.", 
+            f"У ночных ролей есть **{NIGHT_TIMEOUT} секунд** на ход. Общий чат закрыт для всех.", 
             parse_mode="Markdown"
         )
     except Exception:
@@ -523,7 +565,7 @@ async def main():
     dp.include_router(router)
     
     await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Чистый бот Мафии с новым токеном запущен и начинает опрос (polling)...")
+    logging.info("Чистый бот Мафии с защитой чата и правильными кнопками запущен...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
