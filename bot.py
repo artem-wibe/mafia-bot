@@ -43,9 +43,9 @@ NIGHT_TIMEOUT = 45
 DISCUSSION_TIMEOUT = 45 
 VOTING_TIMEOUT = 30     
 
-def get_join_keyboard():
+def get_join_keyboard(bot_username: str):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 1. Написать боту в ЛС (активация)", url="https://t.me/MyServerMafiaBot?start=join")],
+        [InlineKeyboardButton(text="💬 1. Написать боту в ЛС (активация)", url=f"https://t.me/{bot_username}?start=join")],
         [InlineKeyboardButton(text="🎮 2. Войти в игру", callback_data="join")]
     ])
 
@@ -77,11 +77,13 @@ async def cmd_create_game(message: Message, state: FSMContext):
 
     await state.set_state(GameState.lobby)
 
+    bot_info = await message.bot.get_me()
+    
     await message.answer(
         f"🎲 **Лобби Мафии открыто!**\n"
         f"⏰ Сбор: {LOBBY_TIMEOUT // 60} мин. | Мин. игроков: {MIN_PLAYERS}\n\n"
         f"📌 *ВАЖНО:* Нажмите кнопку №1, чтобы бот смог писать вам роли в ЛС!",
-        reply_markup=get_join_keyboard(),
+        reply_markup=get_join_keyboard(bot_info.username),
         parse_mode="Markdown"
     )
 
@@ -521,7 +523,7 @@ async def main():
     dp.include_router(router)
     
     await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Чистый бот Мафии запущен и начинает опрос (polling)...")
+    logging.info("Чистый бот Мафии с новым токеном запущен и начинает опрос (polling)...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
