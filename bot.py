@@ -101,7 +101,8 @@ async def cmd_stop_game(message: Message, state: FSMContext):
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))
 async def group_message_guard(message: Message):
-    if not game["active"]:
+    # Если игра не активна ИЛИ идет этап лобби (регистрация) — вообще не трогаем сообщения
+    if not game["active"] or game["phase"] == "lobby":
         return
 
     user_id = message.from_user.id
